@@ -1,0 +1,16 @@
+[package]
+name = "query-engine"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.102"
+arrow = { version = "58.2.0" }
+parquet = "58.2.0"
+
+[dev-dependencies]
+arrow = { version = "58.2.0", features = ["prettyprint"] }
+arrow-schema = "58.2.0"
+insta = "1.47.2"
+tempfile = "3.27.0"
