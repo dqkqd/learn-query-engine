@@ -34,7 +34,7 @@ impl DataSource for ParquetDataSource {
     fn scan(
         &self,
         projection: Vec<String>,
-    ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>> {
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let file = File::open(&self.filepath)?;
         let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
         if !projection.is_empty() {
@@ -45,7 +45,7 @@ impl DataSource for ParquetDataSource {
             builder = builder.with_projection(mask);
         }
         let reader = builder.build()?;
-        Ok(reader)
+        Ok(Box::new(reader))
     }
 }
 

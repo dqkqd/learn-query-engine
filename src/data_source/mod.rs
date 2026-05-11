@@ -12,5 +12,5 @@ pub trait DataSource {
     fn scan(
         &self,
         projection: Vec<String>,
-    ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>>;
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>>;
 }

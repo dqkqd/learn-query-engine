@@ -41,7 +41,7 @@ impl DataSource for CsvDataSource {
     fn scan(
         &self,
         projection: Vec<String>,
-    ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>> {
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let mut field_ids = Vec::with_capacity(projection.len());
         for name in projection {
             let field_id = self.schema.index_of(&name)?;
@@ -53,7 +53,7 @@ impl DataSource for CsvDataSource {
             builder = builder.with_projection(field_ids);
         };
         let reader = builder.build(file)?;
-        Ok(reader)
+        Ok(Box::new(reader))
     }
 }
 

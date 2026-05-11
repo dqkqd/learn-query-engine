@@ -24,7 +24,7 @@ impl DataSource for MemoryDataSource {
     fn scan(
         &self,
         projection: Vec<String>,
-    ) -> Result<impl Iterator<Item = Result<RecordBatch, ArrowError>>> {
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
         let records = self.records.iter().map(move |batch| {
             let batch = batch.clone();
             let schema = batch.schema();
@@ -39,7 +39,7 @@ impl DataSource for MemoryDataSource {
                 Ok(batch)
             }
         });
-        Ok(records)
+        Ok(Box::new(records))
     }
 }
 
