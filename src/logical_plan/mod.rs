@@ -1,4 +1,4 @@
-mod expr;
+pub mod expr;
 
 use anyhow::Result;
 use arrow::datatypes::Schema;
@@ -16,32 +16,32 @@ pub enum LogicalPlan {
 }
 
 pub struct Scan {
-    path: String,
-    data_source: Box<dyn DataSource>,
-    projection: Vec<String>,
+    pub path: String,
+    pub data_source: Box<dyn DataSource>,
+    pub projection: Vec<String>,
 }
 
 pub struct Selection {
-    input: Box<LogicalPlan>,
-    expr: LogicalExpr,
+    pub input: Box<LogicalPlan>,
+    pub expr: LogicalExpr,
 }
 
 pub struct Projection {
-    input: Box<LogicalPlan>,
-    expr: Vec<LogicalExpr>,
+    pub input: Box<LogicalPlan>,
+    pub expr: Vec<LogicalExpr>,
 }
 
 pub struct Aggregate {
-    input: Box<LogicalPlan>,
-    group_expr: Vec<LogicalExpr>,
-    aggregate_expr: Vec<LogicalExpr>,
+    pub input: Box<LogicalPlan>,
+    pub group_expr: Vec<LogicalExpr>,
+    pub aggregate_expr: Vec<LogicalExpr>,
 }
 
 pub struct Join {
-    left: Box<LogicalPlan>,
-    right: Box<LogicalPlan>,
-    join_type: JoinType,
-    on: Vec<(String, String)>,
+    pub left: Box<LogicalPlan>,
+    pub right: Box<LogicalPlan>,
+    pub join_type: JoinType,
+    pub on: Vec<(String, String)>,
 }
 
 pub enum JoinType {
@@ -74,7 +74,7 @@ impl LogicalPlan {
 
 impl Scan {
     fn schema(&self) -> Result<Arc<Schema>> {
-        let schema = self.data_source.schema();
+        let schema = self.data_source.schema()?;
         if self.projection.is_empty() {
             Ok(schema)
         } else {
@@ -258,7 +258,7 @@ mod test {
         data_source::{DataSource, memory::MemoryDataSource},
         logical_plan::{
             LogicalPlan, Projection, Scan, Selection,
-            expr::{Literal, LogicalExpr},
+            expr::{BinaryOp, Literal, LogicalExpr},
         },
     };
 
@@ -298,9 +298,8 @@ mod test {
         let plan = LogicalPlan::Selection(Selection {
             input: Box::new(scan),
             expr: LogicalExpr::Binary {
-                name: "one".to_string(),
                 left: Box::new(LogicalExpr::Column("name".to_string())),
-                op: "=".to_string(),
+                op: BinaryOp::Eq,
                 right: Box::new(LogicalExpr::Literal(Literal::String("Alice".to_string()))),
             },
         });
@@ -322,9 +321,8 @@ mod test {
         let filter = LogicalPlan::Selection(Selection {
             input: Box::new(scan),
             expr: LogicalExpr::Binary {
-                name: "Eq".to_string(),
                 left: Box::new(LogicalExpr::Column("department".to_string())),
-                op: "=".to_string(),
+                op: BinaryOp::Eq,
                 right: Box::new(LogicalExpr::Literal(Literal::String(
                     "Engineering".to_string(),
                 ))),
@@ -337,9 +335,8 @@ mod test {
                 LogicalExpr::Column("name".to_string()),
                 LogicalExpr::Alias {
                     expr: Box::new(LogicalExpr::Binary {
-                        name: "multiply".to_string(),
                         left: Box::new(LogicalExpr::Column("salary".to_string())),
-                        op: "*".to_string(),
+                        op: BinaryOp::Eq,
                         right: Box::new(LogicalExpr::Literal(Literal::Double(1.1))),
                     }),
                     alias: "new_salary".to_string(),
@@ -348,7 +345,7 @@ mod test {
         });
 
         assert_snapshot!(project.to_string(), @"
-        Projection: #name, #salary * 1.1 as new_salary
+        Projection: #name, #salary = 1.1 as new_salary
           Filter: #department = 'Engineering'
             Scan: employees; projection=None
         ");

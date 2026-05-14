@@ -17,8 +17,8 @@ impl MemoryDataSource {
 }
 
 impl DataSource for MemoryDataSource {
-    fn schema(&self) -> Arc<Schema> {
-        Arc::clone(&self.schema)
+    fn schema(&self) -> Result<Arc<Schema>> {
+        Ok(Arc::clone(&self.schema))
     }
 
     fn scan(

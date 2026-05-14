@@ -12,30 +12,26 @@ use crate::data_source::DataSource;
 
 pub struct CsvDataSource {
     filepath: PathBuf,
-    schema: Arc<Schema>,
 }
 
 impl CsvDataSource {
-    pub fn new(file: impl AsRef<str>) -> Result<CsvDataSource> {
+    pub fn new(file: impl AsRef<str>) -> CsvDataSource {
         let filepath = PathBuf::from(file.as_ref());
-        if !filepath.exists() {
-            bail!("file doesn't exist: {}", file.as_ref());
-        }
-
-        let mut file = File::open(&filepath)?;
-        let (schema, _) = Format::default()
-            .with_header(true)
-            .infer_schema(&mut file, Some(100))?;
-        Ok(CsvDataSource {
-            filepath,
-            schema: Arc::new(schema),
-        })
+        CsvDataSource { filepath }
     }
 }
 
 impl DataSource for CsvDataSource {
-    fn schema(&self) -> Arc<Schema> {
-        Arc::clone(&self.schema)
+    fn schema(&self) -> Result<Arc<Schema>> {
+        if !self.filepath.exists() {
+            bail!("file doesn't exist: {:?}", self.filepath);
+        }
+
+        let mut file = File::open(&self.filepath)?;
+        let (schema, _) = Format::default()
+            .with_header(true)
+            .infer_schema(&mut file, Some(100))?;
+        Ok(Arc::new(schema))
     }
 
     fn scan(
@@ -43,12 +39,13 @@ impl DataSource for CsvDataSource {
         projection: Vec<String>,
     ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let mut field_ids = Vec::with_capacity(projection.len());
+        let schema = self.schema()?;
         for name in projection {
-            let field_id = self.schema.index_of(&name)?;
+            let field_id = schema.index_of(&name)?;
             field_ids.push(field_id);
         }
         let file = File::open(&self.filepath)?;
-        let mut builder = ReaderBuilder::new(Arc::clone(&self.schema)).with_header(true);
+        let mut builder = ReaderBuilder::new(schema).with_header(true);
         if !field_ids.is_empty() {
             builder = builder.with_projection(field_ids);
         };
@@ -85,7 +82,7 @@ mod test {
 
         let path = file.path();
         let filename = path.to_str().unwrap();
-        let csv = CsvDataSource::new(filename)?;
+        let csv = CsvDataSource::new(filename);
         let mut scanner = csv.scan(vec!["a".to_string(), "b".to_string()])?;
         let batch = scanner.next().unwrap()?;
         assert_snapshot!(pretty_format_batches(&[batch])?, @"
@@ -123,7 +120,7 @@ mod test {
 
         let path = file.path();
         let filename = path.to_str().unwrap();
-        let csv = CsvDataSource::new(filename)?;
+        let csv = CsvDataSource::new(filename);
         let mut scanner = csv.scan(vec!["a".to_string()])?;
         let batch = scanner.next().unwrap()?;
         assert_snapshot!(pretty_format_batches(&[batch])?, @"
@@ -161,7 +158,7 @@ mod test {
 
         let path = file.path();
         let filename = path.to_str().unwrap();
-        let csv = CsvDataSource::new(filename)?;
+        let csv = CsvDataSource::new(filename);
         let mut scanner = csv.scan(vec![])?;
         let batch = scanner.next().unwrap()?;
         assert_snapshot!(pretty_format_batches(&[batch])?, @"

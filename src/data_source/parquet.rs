@@ -8,27 +8,24 @@ use crate::data_source::DataSource;
 
 pub struct ParquetDataSource {
     filepath: PathBuf,
-    schema: Arc<Schema>,
 }
 
 impl ParquetDataSource {
-    pub fn new(file: impl AsRef<str>) -> Result<ParquetDataSource> {
+    pub fn new(file: impl AsRef<str>) -> ParquetDataSource {
         let filepath = PathBuf::from(file.as_ref());
-        if !filepath.exists() {
-            bail!("file doesn't exist: {}", file.as_ref());
-        }
-        let file = File::open(&filepath)?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-        Ok(ParquetDataSource {
-            filepath,
-            schema: Arc::clone(builder.schema()),
-        })
+        ParquetDataSource { filepath }
     }
 }
 
 impl DataSource for ParquetDataSource {
-    fn schema(&self) -> Arc<Schema> {
-        Arc::clone(&self.schema)
+    fn schema(&self) -> Result<Arc<Schema>> {
+        if !self.filepath.exists() {
+            bail!("file doesn't exist: {:?}", self.filepath);
+        }
+        let file = File::open(&self.filepath)?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        let schema = builder.schema();
+        Ok(Arc::clone(schema))
     }
 
     fn scan(
@@ -61,14 +58,13 @@ mod test {
     use crate::data_source::{DataSource, csv::CsvDataSource, parquet::ParquetDataSource};
 
     fn csv_to_parquet_file(data: &str) -> Result<NamedTempFile> {
-        // TODO: change to memory data source
         let mut file = NamedTempFile::new()?;
         file.write_all(data.as_bytes())?;
-        let csv = CsvDataSource::new(file.path().to_str().unwrap())?;
+        let csv = CsvDataSource::new(file.path().to_str().unwrap());
         let reader = csv.scan(vec![])?;
 
         let parquet_file = NamedTempFile::new()?;
-        let mut writer = ArrowWriter::try_new(&parquet_file, csv.schema(), None).unwrap();
+        let mut writer = ArrowWriter::try_new(&parquet_file, csv.schema()?, None).unwrap();
 
         for batch in reader {
             writer.write(&batch.unwrap()).unwrap();
@@ -92,7 +88,7 @@ mod test {
 7,seven
 8,eight"#,
         )?;
-        let parquet = ParquetDataSource::new(parquet_file.path().to_str().unwrap())?;
+        let parquet = ParquetDataSource::new(parquet_file.path().to_str().unwrap());
         let mut scanner = parquet.scan(vec!["a".to_string(), "b".to_string()])?;
         let batch = scanner.next().unwrap()?;
         assert_snapshot!(pretty_format_batches(&[batch])?, @"
@@ -125,7 +121,7 @@ mod test {
 7,seven
 8,eight"#,
         )?;
-        let parquet = ParquetDataSource::new(parquet_file.path().to_str().unwrap())?;
+        let parquet = ParquetDataSource::new(parquet_file.path().to_str().unwrap());
         let mut scanner = parquet.scan(vec!["a".to_string()])?;
         let batch = scanner.next().unwrap()?;
         assert_snapshot!(pretty_format_batches(&[batch])?, @"
@@ -149,7 +145,7 @@ mod test {
 7,seven
 8,eight"#,
         )?;
-        let parquet = ParquetDataSource::new(parquet_file.path().to_str().unwrap())?;
+        let parquet = ParquetDataSource::new(parquet_file.path().to_str().unwrap());
         let mut scanner = parquet.scan(vec![])?;
         let batch = scanner.next().unwrap()?;
         assert_snapshot!(pretty_format_batches(&[batch])?, @"

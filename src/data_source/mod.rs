@@ -8,7 +8,7 @@ use anyhow::Result;
 use arrow::{array::RecordBatch, datatypes::Schema, error::ArrowError};
 
 pub trait DataSource {
-    fn schema(&self) -> Arc<Schema>;
+    fn schema(&self) -> Result<Arc<Schema>>;
     fn scan(
         &self,
         projection: Vec<String>,
