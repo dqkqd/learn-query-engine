@@ -9,8 +9,10 @@ anyhow = "1.0.102"
 arrow = { version = "58.2.0" }
 arrow-schema = "58.2.0"
 parquet = "58.2.0"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 arrow = { version = "58.2.0", features = ["prettyprint"] }
 insta = "1.47.2"
+rstest = "0.26.1"
 tempfile = "3.27.0"
