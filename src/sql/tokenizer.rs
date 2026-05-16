@@ -1,6 +1,7 @@
 use crate::sql::{
     error::ParseError,
     token::{Keyword, Literal, Symbol, Token, TokenSpan},
+    token_stream::TokenStream,
 };
 
 pub struct Tokenizer {
@@ -8,7 +9,7 @@ pub struct Tokenizer {
     position: usize,
 }
 
-const SYMBOL_SET: &[u8] = b"+-";
+const SYMBOL_SET: &[u8] = b"+-*";
 
 impl Tokenizer {
     pub fn new(sql: impl AsRef<str>) -> Tokenizer {
@@ -18,6 +19,11 @@ impl Tokenizer {
 
     pub fn tokenize(self) -> Result<Vec<TokenSpan>, ParseError> {
         self.collect()
+    }
+
+    pub fn stream(self) -> Result<TokenStream, ParseError> {
+        let tokens = self.tokenize()?;
+        Ok(TokenStream::new(tokens))
     }
 
     fn skip_whitespace(&mut self) {
@@ -193,11 +199,15 @@ mod test {
     #[test]
     fn simple_symbol() -> Result<(), ParseError> {
         assert_eq!(
-            tokens("1 + 2 ")?,
+            tokens("1 + 2 * 3 - 4")?,
             [
                 Token::Literal(Literal::Long(1)),
                 Token::Symbol(Symbol::Plus),
                 Token::Literal(Literal::Long(2)),
+                Token::Symbol(Symbol::Multiply),
+                Token::Literal(Literal::Long(3)),
+                Token::Symbol(Symbol::Minus),
+                Token::Literal(Literal::Long(4)),
             ]
         );
         Ok(())

@@ -2,21 +2,21 @@ use std::fmt::Display;
 
 use crate::sql::error::ParseError;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Token {
     Keyword(Keyword),
     Literal(Literal),
     Symbol(Symbol),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Keyword {
     Select,
     From,
     Where,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Long(i64),
     Double(f64),
@@ -24,10 +24,11 @@ pub enum Literal {
     Indentifier(String),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Symbol {
     Plus,
     Minus,
+    Multiply,
 }
 
 impl Eq for Literal {}
@@ -78,6 +79,7 @@ impl TryFrom<&str> for Symbol {
         let symbol = match value {
             "+" => Symbol::Plus,
             "-" => Symbol::Minus,
+            "*" => Symbol::Multiply,
             c => return Err(ParseError::InvalidSymbol(c.to_string())),
         };
         Ok(symbol)
@@ -120,11 +122,12 @@ impl Display for Symbol {
         match self {
             Symbol::Plus => write!(f, "+"),
             Symbol::Minus => write!(f, "-"),
+            Symbol::Multiply => write!(f, "*"),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TokenSpan {
     pub token: Token,
     pub start: usize,
