@@ -1,6 +1,5 @@
+use anyhow::{Result, bail};
 use std::fmt::Display;
-
-use crate::sql::error::ParseError;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Token {
@@ -34,21 +33,21 @@ pub enum Symbol {
 impl Eq for Literal {}
 
 impl TryFrom<&str> for Keyword {
-    type Error = ParseError;
+    type Error = anyhow::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let keyword = match value.to_lowercase().as_str() {
             "select" => Keyword::Select,
             "from" => Keyword::From,
             "where" => Keyword::Where,
-            s => return Err(ParseError::InvalidKeyword(s.to_string())),
+            s => bail!("invalid keyword {}", s),
         };
         Ok(keyword)
     }
 }
 
 impl TryFrom<&str> for Literal {
-    type Error = ParseError;
+    type Error = anyhow::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         if let Ok(value) = value.parse::<i64>() {
@@ -62,9 +61,7 @@ impl TryFrom<&str> for Literal {
         if value.starts_with("'") {
             match value.strip_prefix("'").and_then(|v| v.strip_suffix("'")) {
                 Some(value) => Ok(Literal::String(value.to_string())),
-                None => Err(ParseError::InvalidLiteralString(
-                    "unterminated literal string".to_string(),
-                )),
+                None => bail!("unterminated literal string"),
             }
         } else {
             Ok(Literal::Indentifier(value.to_string()))
@@ -73,14 +70,14 @@ impl TryFrom<&str> for Literal {
 }
 
 impl TryFrom<&str> for Symbol {
-    type Error = ParseError;
+    type Error = anyhow::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let symbol = match value {
             "+" => Symbol::Plus,
             "-" => Symbol::Minus,
             "*" => Symbol::Multiply,
-            c => return Err(ParseError::InvalidSymbol(c.to_string())),
+            c => bail!("invalid symbol {}", c),
         };
         Ok(symbol)
     }

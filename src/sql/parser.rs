@@ -81,16 +81,16 @@ pub fn prefix_power(symbol: Symbol) -> u8 {
 
 #[cfg(test)]
 mod test {
+    use anyhow::Result;
     use insta::assert_debug_snapshot;
 
     use crate::sql::{
-        error::ParseError,
         expr::{SqlExpr, SqlIdentifier},
         parser::Parser,
         tokenizer::Tokenizer,
     };
 
-    fn parse(sql: &str) -> Result<SqlExpr, ParseError> {
+    fn parse(sql: &str) -> Result<SqlExpr> {
         let tokenizer = Tokenizer::new(sql);
         let stream = tokenizer.stream()?;
         let mut parser = Parser::new(stream);
@@ -99,7 +99,7 @@ mod test {
     }
 
     #[test]
-    pub fn identifier() -> Result<(), ParseError> {
+    pub fn identifier() -> Result<()> {
         let data = parse("employee")?;
         assert_eq!(
             data,
@@ -109,7 +109,7 @@ mod test {
     }
 
     #[test]
-    pub fn expr() -> Result<(), ParseError> {
+    pub fn expr() -> Result<()> {
         let data = parse("1 + 2")?;
         assert_debug_snapshot!(
             data,
@@ -129,7 +129,7 @@ mod test {
     }
 
     #[test]
-    pub fn expr_associate() -> Result<(), ParseError> {
+    pub fn expr_associate() -> Result<()> {
         assert_debug_snapshot!(
         parse("1 + 2 * 3")?,
                     @r#"

@@ -1,5 +1,6 @@
+use anyhow::{Result, bail};
+
 use crate::sql::{
-    error::ParseError,
     token::{Keyword, Literal, Symbol, Token, TokenSpan},
     token_stream::TokenStream,
 };
@@ -17,11 +18,11 @@ impl Tokenizer {
         Tokenizer { bytes, position: 0 }
     }
 
-    pub fn tokenize(self) -> Result<Vec<TokenSpan>, ParseError> {
+    pub fn tokenize(self) -> Result<Vec<TokenSpan>> {
         self.collect()
     }
 
-    pub fn stream(self) -> Result<TokenStream, ParseError> {
+    pub fn stream(self) -> Result<TokenStream> {
         let tokens = self.tokenize()?;
         Ok(TokenStream::new(tokens))
     }
@@ -78,7 +79,7 @@ impl Tokenizer {
     }
 
     /// Scan keyword or identifier
-    fn scan_identifier(&mut self) -> Result<TokenSpan, ParseError> {
+    fn scan_identifier(&mut self) -> Result<TokenSpan> {
         let (token, position) = self.get_token_string();
         let token = match Keyword::try_from(token.as_str()) {
             Ok(keyword) => Token::Keyword(keyword),
@@ -90,13 +91,11 @@ impl Tokenizer {
     }
 
     /// Scan number
-    fn scan_number(&mut self) -> Result<TokenSpan, ParseError> {
+    fn scan_number(&mut self) -> Result<TokenSpan> {
         let (token, position) = self.get_token_string();
         let token = Literal::try_from(token.as_str())?;
         if !matches!(token, Literal::Long(_)) && !matches!(token, Literal::Double(_)) {
-            return Err(ParseError::InvalidLiteralString(
-                "token is not a number".to_string(),
-            ));
+            bail!("token is not a number")
         }
         let token = Token::Literal(token);
         let token_span = TokenSpan::new(token, self.position, position);
@@ -105,7 +104,7 @@ impl Tokenizer {
     }
 
     /// Scan symbol
-    fn scan_symbol(&mut self) -> Result<TokenSpan, ParseError> {
+    fn scan_symbol(&mut self) -> Result<TokenSpan> {
         let (token, position) = self.get_token_string();
         let token = Symbol::try_from(token.as_str())?;
         let token = Token::Symbol(token);
@@ -116,7 +115,7 @@ impl Tokenizer {
 }
 
 impl Iterator for Tokenizer {
-    type Item = Result<TokenSpan, ParseError>;
+    type Item = Result<TokenSpan>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.skip_whitespace();
@@ -149,12 +148,11 @@ mod test {
     use rstest::rstest;
 
     use crate::sql::{
-        error::ParseError,
         token::{Keyword, Literal, Symbol, Token},
         tokenizer::Tokenizer,
     };
 
-    fn tokens(s: &str) -> Result<Vec<Token>, ParseError> {
+    fn tokens(s: &str) -> Result<Vec<Token>> {
         let tokens = Tokenizer::new(s)
             .tokenize()?
             .into_iter()
@@ -167,7 +165,7 @@ mod test {
     #[case("123", Literal::Long(123))]
     #[case("1.23", Literal::Double(1.23))]
     #[case("one", Literal::Indentifier("one".to_string()))]
-    fn literal(#[case] sql: &str, #[case] expected: Literal) -> Result<(), ParseError> {
+    fn literal(#[case] sql: &str, #[case] expected: Literal) -> Result<()> {
         assert_eq!(tokens(sql)?, [Token::Literal(expected)]);
         Ok(())
     }
@@ -177,13 +175,13 @@ mod test {
     #[case("Select", Keyword::Select)]
     #[case("FROM", Keyword::From)]
     #[case("WHERE", Keyword::Where)]
-    fn keyword(#[case] sql: &str, #[case] expected: Keyword) -> Result<(), ParseError> {
+    fn keyword(#[case] sql: &str, #[case] expected: Keyword) -> Result<()> {
         assert_eq!(tokens(sql)?, [Token::Keyword(expected)]);
         Ok(())
     }
 
     #[test]
-    fn simple_select() -> Result<(), ParseError> {
+    fn simple_select() -> Result<()> {
         assert_eq!(
             tokens("select name from employee")?,
             [
@@ -197,7 +195,7 @@ mod test {
     }
 
     #[test]
-    fn simple_symbol() -> Result<(), ParseError> {
+    fn simple_symbol() -> Result<()> {
         assert_eq!(
             tokens("1 + 2 * 3 - 4")?,
             [
