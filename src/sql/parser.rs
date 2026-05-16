@@ -1,3 +1,5 @@
+use anyhow::{Context, Result};
+
 use crate::sql::{
     expr::{SqlExpr, SqlIdentifier},
     token::{Literal, Symbol, Token},
@@ -13,8 +15,8 @@ impl Parser {
         Parser { stream }
     }
 
-    fn prefix(&mut self) -> Option<SqlExpr> {
-        let span = self.stream.next()?;
+    fn prefix(&mut self) -> Result<SqlExpr> {
+        let span = self.stream.next().with_context(|| "No remaining tokens")?;
         let expr = match span.token {
             Token::Keyword(_keyword) => todo!(),
             Token::Literal(literal) => match literal {
@@ -25,11 +27,15 @@ impl Parser {
             },
             Token::Symbol(_symbol) => todo!(),
         };
-        Some(expr)
+        Ok(expr)
     }
 
-    fn infix(&mut self, lhs: SqlExpr, bp: u8) -> Option<SqlExpr> {
-        let op = self.stream.next()?.token;
+    fn infix(&mut self, lhs: SqlExpr, bp: u8) -> Result<SqlExpr> {
+        let op = self
+            .stream
+            .next()
+            .with_context(|| "No remaining tokens")?
+            .token;
         let rhs = self.parse_expr(bp)?;
         let expr = match op {
             Token::Keyword(_keyword) => todo!(),
@@ -40,10 +46,10 @@ impl Parser {
                 rhs: Box::new(rhs),
             },
         };
-        Some(expr)
+        Ok(expr)
     }
 
-    fn parse_expr(&mut self, min_power: u8) -> Option<SqlExpr> {
+    fn parse_expr(&mut self, min_power: u8) -> Result<SqlExpr> {
         let mut lhs = self.prefix()?;
         // TODO: token can be other than symbol
         while let Some(Token::Symbol(op)) = self.stream.peek().map(|s| s.token) {
@@ -53,10 +59,10 @@ impl Parser {
             }
             lhs = self.infix(lhs, bp)?;
         }
-        Some(lhs)
+        Ok(lhs)
     }
 
-    fn parse(&mut self) -> Option<SqlExpr> {
+    fn parse(&mut self) -> Result<SqlExpr> {
         self.parse_expr(0)
     }
 }
