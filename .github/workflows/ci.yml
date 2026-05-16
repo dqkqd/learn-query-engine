@@ -4,7 +4,7 @@ on:
   pull_request:
 
 jobs:
-  formatting:
+  fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
@@ -13,7 +13,7 @@ jobs:
         with:
           components: rustfmt
       - name: cargo fmt
-        uses: actions-rust-lang/rustfmt@v1
+        run: cargo fmt --all -- --check
 
   clippy:
     name: cargo clippy
@@ -24,10 +24,11 @@ jobs:
         with:
           components: clippy
       - name: cargo clippy
-        run: cargo clippy
+        run: cargo clippy --all-targets --all-features
 
   test:
     name: cargo test
+    needs: [fmt, clippy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
