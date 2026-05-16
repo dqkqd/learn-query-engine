@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result};
 
 use crate::sql::{
     token::{Keyword, Literal, Symbol, Token, TokenSpan},
@@ -10,7 +10,7 @@ pub struct Tokenizer {
     position: usize,
 }
 
-const SYMBOL_SET: &[u8] = b"+-*";
+const SYMBOL_SET: &[u8] = b"+-*,";
 
 impl Tokenizer {
     pub fn new(sql: impl AsRef<str>) -> Tokenizer {
@@ -33,31 +33,26 @@ impl Tokenizer {
         }
     }
 
-    /// Scan until we see a white space or a terminate character
-    /// Return the position at the terminate character.
-    fn get_next_terminate_position(&self) -> usize {
-        let mut position = self.position;
-        while self
-            .bytes
-            .get(position)
-            .is_some_and(|c| !c.is_ascii_whitespace())
-        {
+    fn get_string(&self, position: usize) -> Result<String> {
+        let token = self.bytes[self.position..position].to_vec();
+        let token = String::from_utf8(token).with_context(|| {
+            format!(
+                "Cannot convert to string at ({}, {})",
+                self.position, position
+            )
+        })?;
+        Ok(token)
+    }
+
+    fn get_position<F>(&self, predicate: F, from: Option<usize>) -> usize
+    where
+        F: Fn(&u8) -> bool,
+    {
+        let mut position = from.unwrap_or(self.position);
+        while self.bytes.get(position).is_some_and(|b| !predicate(b)) {
             position += 1;
         }
         position
-    }
-
-    /// Get token string, return a string and position
-    fn get_token_string(&self) -> (String, usize) {
-        let position = self.get_next_terminate_position();
-        let token = self.bytes[self.position..position].to_vec();
-        let token = String::from_utf8(token)
-            .unwrap_or_else(|_| self.panic_error("Invalid utf8 string", self.position, position));
-        (token, position)
-    }
-
-    fn panic_error(&self, message: &str, start: usize, end: usize) -> ! {
-        panic!("{}, start: {}, end: {}", message, start, end)
     }
 
     fn is_identifier_start(&self) -> bool {
@@ -80,7 +75,8 @@ impl Tokenizer {
 
     /// Scan keyword or identifier
     fn scan_identifier(&mut self) -> Result<TokenSpan> {
-        let (token, position) = self.get_token_string();
+        let position = self.get_position(|b| !b.is_ascii_alphabetic(), None);
+        let token = self.get_string(position)?;
         let token = match Keyword::try_from(token.as_str()) {
             Ok(keyword) => Token::Keyword(keyword),
             Err(_) => Token::Literal(Literal::Indentifier(token)),
@@ -92,20 +88,22 @@ impl Tokenizer {
 
     /// Scan number
     fn scan_number(&mut self) -> Result<TokenSpan> {
-        let (token, position) = self.get_token_string();
-        let token = Literal::try_from(token.as_str())?;
-        if !matches!(token, Literal::Long(_)) && !matches!(token, Literal::Double(_)) {
-            bail!("token is not a number")
+        let mut position = self.get_position(|b| !b.is_ascii_digit(), None);
+        // might be we are parsing float, check it!
+        if self.bytes.get(position).is_some_and(|b| b == &b'.') {
+            position = self.get_position(|b| !b.is_ascii_digit(), Some(position + 1));
         }
-        let token = Token::Literal(token);
-        let token_span = TokenSpan::new(token, self.position, position);
-        self.position = token_span.end;
-        Ok(token_span)
+        let token = self.get_string(position)?;
+        let token = Literal::try_from(token.as_str())?;
+        let span = TokenSpan::new(Token::Literal(token), self.position, position);
+        self.position = span.end;
+        Ok(span)
     }
 
     /// Scan symbol
     fn scan_symbol(&mut self) -> Result<TokenSpan> {
-        let (token, position) = self.get_token_string();
+        let position = self.get_position(|b| !SYMBOL_SET.contains(b), None);
+        let token = self.get_string(position)?;
         let token = Symbol::try_from(token.as_str())?;
         let token = Token::Symbol(token);
         let token_span = TokenSpan::new(token, self.position, position);
@@ -206,6 +204,27 @@ mod test {
                 Token::Literal(Literal::Long(3)),
                 Token::Symbol(Symbol::Minus),
                 Token::Literal(Literal::Long(4)),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn commas() -> Result<()> {
+        assert_eq!(
+            tokens("1 + 2, 3 + 4, 5 + 6")?,
+            [
+                Token::Literal(Literal::Long(1)),
+                Token::Symbol(Symbol::Plus),
+                Token::Literal(Literal::Long(2)),
+                Token::Symbol(Symbol::Comma),
+                Token::Literal(Literal::Long(3)),
+                Token::Symbol(Symbol::Plus),
+                Token::Literal(Literal::Long(4)),
+                Token::Symbol(Symbol::Comma),
+                Token::Literal(Literal::Long(5)),
+                Token::Symbol(Symbol::Plus),
+                Token::Literal(Literal::Long(6)),
             ]
         );
         Ok(())

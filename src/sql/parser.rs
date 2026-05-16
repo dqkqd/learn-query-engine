@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::sql::{
     expr::{SqlExpr, SqlIdentifier},
-    token::{Literal, Symbol, Token},
+    token::{Keyword, Literal, Symbol, Token},
     token_stream::TokenStream,
 };
 
@@ -18,14 +18,20 @@ impl Parser {
     fn prefix(&mut self) -> Result<SqlExpr> {
         let span = self.stream.next().with_context(|| "No remaining tokens")?;
         let expr = match span.token {
-            Token::Keyword(_keyword) => todo!(),
+            Token::Keyword(keyword) => match keyword {
+                Keyword::Select => self.select()?,
+                Keyword::From => todo!(),
+                Keyword::Where => todo!(),
+            },
             Token::Literal(literal) => match literal {
                 Literal::Long(v) => SqlExpr::Long(v),
                 Literal::Double(v) => SqlExpr::Double(v),
                 Literal::String(v) => SqlExpr::String(v),
                 Literal::Indentifier(ident) => SqlExpr::Indentifier(SqlIdentifier(ident)),
             },
-            Token::Symbol(_symbol) => todo!(),
+            Token::Symbol(_symbol) => {
+                todo!()
+            }
         };
         Ok(expr)
     }
@@ -62,8 +68,37 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse(&mut self) -> Result<SqlExpr> {
+    pub fn parse(&mut self) -> Result<SqlExpr> {
         self.parse_expr(0)
+    }
+
+    fn select(&mut self) -> Result<SqlExpr> {
+        let exprs = self.expr_list()?;
+        self.stream.expect(Token::Keyword(Keyword::From))?;
+        let Some(Token::Literal(Literal::Indentifier(table))) = self.stream.next().map(|s| s.token)
+        else {
+            bail!("Expect `FROM` table in select statement")
+        };
+        let select = SqlExpr::Select {
+            projection: exprs,
+            table_name: SqlIdentifier(table),
+        };
+        Ok(select)
+    }
+
+    fn expr_list(&mut self) -> Result<Vec<SqlExpr>> {
+        let mut exprs = vec![];
+        while let Ok(expr) = self.parse() {
+            exprs.push(expr);
+            match self.stream.peek().map(|s| s.token) {
+                Some(Token::Symbol(Symbol::Comma)) => {
+                    self.stream.next().with_context(|| "No remaining tokens")?;
+                    continue;
+                }
+                _ => break,
+            }
+        }
+        Ok(exprs)
     }
 }
 
@@ -73,6 +108,7 @@ pub fn infix_power(symbol: Symbol) -> u8 {
         Symbol::Plus => 10,
         Symbol::Minus => 10,
         Symbol::Multiply => 20,
+        Symbol::Comma => 0,
     }
 }
 
@@ -82,6 +118,7 @@ pub fn prefix_power(symbol: Symbol) -> u8 {
         Symbol::Plus => 10,
         Symbol::Minus => 10,
         Symbol::Multiply => 20,
+        Symbol::Comma => 0,
     }
 }
 
@@ -115,27 +152,7 @@ mod test {
     }
 
     #[test]
-    pub fn expr() -> Result<()> {
-        let data = parse("1 + 2")?;
-        assert_debug_snapshot!(
-            data,
-            @r#"
-        BinaryExpr {
-            lhs: Long(
-                1,
-            ),
-            op: "+",
-            rhs: Long(
-                2,
-            ),
-        }
-        "#
-        );
-        Ok(())
-    }
-
-    #[test]
-    pub fn expr_associate() -> Result<()> {
+    fn expr_associate() -> Result<()> {
         assert_debug_snapshot!(
         parse("1 + 2 * 3")?,
                     @r#"
@@ -178,6 +195,43 @@ mod test {
         "#
                 );
 
+        Ok(())
+    }
+
+    #[test]
+    fn select() -> Result<()> {
+        assert_debug_snapshot!(parse("SELECT 1 + 2, 2 + 3, name FROM employee")?, @r#"
+        Select {
+            projection: [
+                BinaryExpr {
+                    lhs: Long(
+                        1,
+                    ),
+                    op: "+",
+                    rhs: Long(
+                        2,
+                    ),
+                },
+                BinaryExpr {
+                    lhs: Long(
+                        2,
+                    ),
+                    op: "+",
+                    rhs: Long(
+                        3,
+                    ),
+                },
+                Indentifier(
+                    SqlIdentifier(
+                        "name",
+                    ),
+                ),
+            ],
+            table_name: SqlIdentifier(
+                "employee",
+            ),
+        }
+        "#);
         Ok(())
     }
 }

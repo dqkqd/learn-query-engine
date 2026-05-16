@@ -28,6 +28,7 @@ pub enum Symbol {
     Plus,
     Minus,
     Multiply,
+    Comma,
 }
 
 impl Eq for Literal {}
@@ -77,6 +78,7 @@ impl TryFrom<&str> for Symbol {
             "+" => Symbol::Plus,
             "-" => Symbol::Minus,
             "*" => Symbol::Multiply,
+            "," => Symbol::Comma,
             c => bail!("invalid symbol {}", c),
         };
         Ok(symbol)
@@ -120,6 +122,7 @@ impl Display for Symbol {
             Symbol::Plus => write!(f, "+"),
             Symbol::Minus => write!(f, "-"),
             Symbol::Multiply => write!(f, "*"),
+            Symbol::Comma => write!(f, ","),
         }
     }
 }

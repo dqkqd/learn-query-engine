@@ -1,4 +1,6 @@
-use crate::sql::token::TokenSpan;
+use anyhow::{Context, Result, bail};
+
+use crate::sql::token::{Token, TokenSpan};
 
 #[derive(Debug)]
 pub struct TokenStream {
@@ -16,6 +18,14 @@ impl TokenStream {
 
     pub fn peek(&self) -> Option<TokenSpan> {
         self.tokens.get(self.position).cloned()
+    }
+
+    pub fn expect(&mut self, expect: Token) -> Result<()> {
+        let span = self.next().with_context(|| "No remaining tokens")?;
+        if span.token != expect {
+            bail!("Unexpected token: expected {}, got {}", expect, span.token);
+        }
+        Ok(())
     }
 }
 
