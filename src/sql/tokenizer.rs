@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::sql::{
     token::{Keyword, Literal, Symbol, Token, TokenSpan},
@@ -10,7 +10,9 @@ pub struct Tokenizer {
     position: usize,
 }
 
-const SYMBOL_SET: &[u8] = b"+-*,";
+const SYMBOL_SET: &[u8] = b"+-*/=><,()";
+const ALLOW_IDENTIFIER_SET: &[u8] = b"_";
+const STRING_QUOTE_SET: &[u8] = b"\'\"";
 
 impl Tokenizer {
     pub fn new(sql: impl AsRef<str>) -> Tokenizer {
@@ -33,14 +35,10 @@ impl Tokenizer {
         }
     }
 
-    fn get_string(&self, position: usize) -> Result<String> {
-        let token = self.bytes[self.position..position].to_vec();
-        let token = String::from_utf8(token).with_context(|| {
-            format!(
-                "Cannot convert to string at ({}, {})",
-                self.position, position
-            )
-        })?;
+    fn get_string(&self, start: usize, end: usize) -> Result<String> {
+        let token = self.bytes[start..end].to_vec();
+        let token = String::from_utf8(token)
+            .with_context(|| format!("Cannot convert to string at ({}, {})", start, end))?;
         Ok(token)
     }
 
@@ -73,15 +71,53 @@ impl Tokenizer {
             .is_some_and(|c| SYMBOL_SET.contains(c))
     }
 
+    fn is_string_start(&self) -> bool {
+        self.bytes
+            .get(self.position)
+            .is_some_and(|c| STRING_QUOTE_SET.contains(c))
+    }
+
     /// Scan keyword or identifier
     fn scan_identifier(&mut self) -> Result<TokenSpan> {
-        let position = self.get_position(|b| !b.is_ascii_alphabetic(), None);
-        let token = self.get_string(position)?;
+        let position = self.get_position(
+            |b| !b.is_ascii_alphabetic() && !ALLOW_IDENTIFIER_SET.contains(b),
+            None,
+        );
+        let token = self.get_string(self.position, position)?;
+        if let Ok(token) = self.scan_ambiguous_identifier(token.as_str(), position) {
+            return Ok(token);
+        }
         let token = match Keyword::try_from(token.as_str()) {
             Ok(keyword) => Token::Keyword(keyword),
-            Err(_) => Token::Literal(Literal::Indentifier(token)),
+            Err(_) => Token::Literal(Literal::Identifier(token)),
         };
         let token_span = TokenSpan::new(token, self.position, position);
+        self.position = token_span.end;
+        Ok(token_span)
+    }
+
+    /// Scan ambiguous identifier: group by | order by
+    fn scan_ambiguous_identifier(&mut self, token: &str, position: usize) -> Result<TokenSpan> {
+        let token = token.to_lowercase();
+        let token = token.as_str();
+        if token != "group" && token != "order" {
+            bail!("Not an ambiguous identifier: `{}`", token)
+        }
+
+        let by_start_position = self.get_position(|b| !b.is_ascii_whitespace(), Some(position));
+        let by_end_position =
+            self.get_position(|b| !b.is_ascii_alphabetic(), Some(by_start_position));
+        let by_token = self.get_string(by_start_position, by_end_position)?;
+        if by_token.to_lowercase().as_str() != "by" {
+            bail!("Expected `by`, got `{}`", by_token)
+        }
+
+        let token = match token {
+            "group" => Token::Keyword(Keyword::GroupBy),
+            "order" => Token::Keyword(Keyword::OrderBy),
+            _ => unreachable!(),
+        };
+        let token_span = TokenSpan::new(token, position, by_end_position);
         self.position = token_span.end;
         Ok(token_span)
     }
@@ -93,7 +129,7 @@ impl Tokenizer {
         if self.bytes.get(position).is_some_and(|b| b == &b'.') {
             position = self.get_position(|b| !b.is_ascii_digit(), Some(position + 1));
         }
-        let token = self.get_string(position)?;
+        let token = self.get_string(self.position, position)?;
         let token = Literal::try_from(token.as_str())?;
         let span = TokenSpan::new(Token::Literal(token), self.position, position);
         self.position = span.end;
@@ -103,9 +139,29 @@ impl Tokenizer {
     /// Scan symbol
     fn scan_symbol(&mut self) -> Result<TokenSpan> {
         let position = self.get_position(|b| !SYMBOL_SET.contains(b), None);
-        let token = self.get_string(position)?;
+        let token = self.get_string(self.position, position)?;
         let token = Symbol::try_from(token.as_str())?;
         let token = Token::Symbol(token);
+        let token_span = TokenSpan::new(token, self.position, position);
+        self.position = token_span.end;
+        Ok(token_span)
+    }
+
+    /// Scan string including quotes
+    fn scan_string(&mut self) -> Result<TokenSpan> {
+        // get current quote
+        let quote = self.bytes.get(self.position).unwrap();
+        let position = self.get_position(|b| b == quote, Some(self.position + 1));
+        if position == self.bytes.len() {
+            bail!(
+                "Unterminated string `{}`",
+                self.get_string(self.position, position)?
+            );
+        }
+        let position = position + 1;
+        let token = self.get_string(self.position, position)?;
+        let token = Literal::try_from(token.as_str())?;
+        let token = Token::Literal(token);
         let token_span = TokenSpan::new(token, self.position, position);
         self.position = token_span.end;
         Ok(token_span)
@@ -136,6 +192,11 @@ impl Iterator for Tokenizer {
             return Some(span);
         }
 
+        if self.is_string_start() {
+            let span = self.scan_string();
+            return Some(span);
+        }
+
         None
     }
 }
@@ -143,6 +204,7 @@ impl Iterator for Tokenizer {
 #[cfg(test)]
 mod test {
     use anyhow::Result;
+    use insta::assert_snapshot;
     use rstest::rstest;
 
     use crate::sql::{
@@ -159,10 +221,16 @@ mod test {
         Ok(tokens)
     }
 
+    fn tokens_to_string(tokens: Vec<Token>) -> String {
+        let s: Vec<String> = tokens.into_iter().map(|t| t.to_string()).collect();
+        s.join(" ")
+    }
+
     #[rstest]
     #[case("123", Literal::Long(123))]
     #[case("1.23", Literal::Double(1.23))]
-    #[case("one", Literal::Indentifier("one".to_string()))]
+    #[case("one", Literal::Identifier("one".to_string()))]
+    #[case("contains_underscore", Literal::Identifier("contains_underscore".to_string()))]
     fn literal(#[case] sql: &str, #[case] expected: Literal) -> Result<()> {
         assert_eq!(tokens(sql)?, [Token::Literal(expected)]);
         Ok(())
@@ -173,59 +241,73 @@ mod test {
     #[case("Select", Keyword::Select)]
     #[case("FROM", Keyword::From)]
     #[case("WHERE", Keyword::Where)]
+    #[case("AS", Keyword::As)]
     fn keyword(#[case] sql: &str, #[case] expected: Keyword) -> Result<()> {
         assert_eq!(tokens(sql)?, [Token::Keyword(expected)]);
         Ok(())
     }
 
+    #[rstest]
+    #[case("+", Symbol::Plus)]
+    #[case("-", Symbol::Minus)]
+    #[case("*", Symbol::Multiply)]
+    #[case("/", Symbol::Divide)]
+    #[case("=", Symbol::Eq)]
+    #[case(",", Symbol::Comma)]
+    fn symbol(#[case] sql: &str, #[case] expected: Symbol) -> Result<()> {
+        assert_eq!(tokens(sql)?, [Token::Symbol(expected)]);
+        Ok(())
+    }
+
     #[test]
-    fn simple_select() -> Result<()> {
-        assert_eq!(
-            tokens("select name from employee")?,
-            [
-                Token::Keyword(Keyword::Select),
-                Token::Literal(Literal::Indentifier("name".to_string())),
-                Token::Keyword(Keyword::From),
-                Token::Literal(Literal::Indentifier("employee".to_string())),
-            ]
+    fn select_1() -> Result<()> {
+        let tokens = tokens(
+            r#"
+SELECT id, first_name, salary * 1.1 AS new_salary
+FROM employee
+WHERE state = 'CO'
+"#,
+        )?;
+
+        assert_snapshot!(
+            tokens_to_string(tokens),
+            @"SELECT #id , #first_name , #salary * 1.1 AS #new_salary FROM #employee WHERE #state = 'CO'",
         );
         Ok(())
     }
 
     #[test]
-    fn simple_symbol() -> Result<()> {
-        assert_eq!(
-            tokens("1 + 2 * 3 - 4")?,
-            [
-                Token::Literal(Literal::Long(1)),
-                Token::Symbol(Symbol::Plus),
-                Token::Literal(Literal::Long(2)),
-                Token::Symbol(Symbol::Multiply),
-                Token::Literal(Literal::Long(3)),
-                Token::Symbol(Symbol::Minus),
-                Token::Literal(Literal::Long(4)),
-            ]
+    fn select_2() -> Result<()> {
+        let tokens = tokens(
+            r#"
+SELECT id, first_name, salary/12 AS monthly_salary
+FROM employee
+WHERE state = 'CO' AND monthly_salary > 1000
+"#,
+        )?;
+
+        assert_snapshot!(
+            tokens_to_string(tokens),
+            @"SELECT #id , #first_name , #salary / 12 AS #monthly_salary FROM #employee WHERE #state = 'CO' AND #monthly_salary > 1000",
         );
         Ok(())
     }
 
     #[test]
-    fn commas() -> Result<()> {
-        assert_eq!(
-            tokens("1 + 2, 3 + 4, 5 + 6")?,
-            [
-                Token::Literal(Literal::Long(1)),
-                Token::Symbol(Symbol::Plus),
-                Token::Literal(Literal::Long(2)),
-                Token::Symbol(Symbol::Comma),
-                Token::Literal(Literal::Long(3)),
-                Token::Symbol(Symbol::Plus),
-                Token::Literal(Literal::Long(4)),
-                Token::Symbol(Symbol::Comma),
-                Token::Literal(Literal::Long(5)),
-                Token::Symbol(Symbol::Plus),
-                Token::Literal(Literal::Long(6)),
-            ]
+    fn select_3() -> Result<()> {
+        let tokens = tokens(
+            r#"
+SELECT department, AVG(salary) AS avg_salary
+FROM employee
+WHERE state = 'CO'
+GROUP BY department
+HAVING avg_salary > 50000
+"#,
+        )?;
+
+        assert_snapshot!(
+            tokens_to_string(tokens),
+            @"SELECT #department , AVG ( #salary ) AS #avg_salary FROM #employee WHERE #state = 'CO' GROUP BY #department HAVING #avg_salary > 50000",
         );
         Ok(())
     }

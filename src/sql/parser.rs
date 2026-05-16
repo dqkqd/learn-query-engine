@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::sql::{
     expr::{SqlExpr, SqlIdentifier},
@@ -16,18 +16,24 @@ impl Parser {
     }
 
     fn prefix(&mut self) -> Result<SqlExpr> {
-        let span = self.stream.next().with_context(|| "No remaining tokens")?;
-        let expr = match span.token {
+        let token = self.stream.next_token()?;
+        let expr = match token {
             Token::Keyword(keyword) => match keyword {
                 Keyword::Select => self.select()?,
                 Keyword::From => todo!(),
                 Keyword::Where => todo!(),
+                Keyword::As => todo!(),
+                Keyword::And => todo!(),
+                Keyword::Avg => SqlExpr::Indentifier(SqlIdentifier(Keyword::Avg.to_string())),
+                Keyword::GroupBy => todo!(),
+                Keyword::OrderBy => todo!(),
+                Keyword::Having => todo!(),
             },
             Token::Literal(literal) => match literal {
                 Literal::Long(v) => SqlExpr::Long(v),
                 Literal::Double(v) => SqlExpr::Double(v),
                 Literal::String(v) => SqlExpr::String(v),
-                Literal::Indentifier(ident) => SqlExpr::Indentifier(SqlIdentifier(ident)),
+                Literal::Identifier(ident) => SqlExpr::Indentifier(SqlIdentifier(ident)),
             },
             Token::Symbol(_symbol) => {
                 todo!()
@@ -37,19 +43,44 @@ impl Parser {
     }
 
     fn infix(&mut self, lhs: SqlExpr, bp: u8) -> Result<SqlExpr> {
-        let op = self
-            .stream
-            .next()
-            .with_context(|| "No remaining tokens")?
-            .token;
-        let rhs = self.parse_expr(bp)?;
+        let op = self.stream.next_token()?;
         let expr = match op {
-            Token::Keyword(_keyword) => todo!(),
+            Token::Keyword(keyword) => match keyword {
+                Keyword::Select => todo!(),
+                Keyword::From => todo!(),
+                Keyword::Where => todo!(),
+                Keyword::As => match self.parse_expr(bp)? {
+                    SqlExpr::Indentifier(alias) => SqlExpr::Alias {
+                        expr: Box::new(lhs),
+                        alias,
+                    },
+                    rhs => bail!("Expect Indentifier after `AS`, got {:?}", rhs),
+                },
+                Keyword::And => SqlExpr::BinaryExpr {
+                    lhs: Box::new(lhs),
+                    op: Keyword::And.to_string(),
+                    rhs: Box::new(self.parse_expr(bp)?),
+                },
+                Keyword::Avg => todo!(),
+                Keyword::GroupBy => todo!(),
+                Keyword::OrderBy => todo!(),
+                Keyword::Having => todo!(),
+            },
             Token::Literal(_literal) => todo!(),
-            Token::Symbol(symbol) => SqlExpr::BinaryExpr {
-                lhs: Box::new(lhs),
-                op: symbol.to_string(),
-                rhs: Box::new(rhs),
+            Token::Symbol(symbol) => match symbol {
+                Symbol::LParen => match lhs {
+                    SqlExpr::Indentifier(SqlIdentifier(id)) => {
+                        let exprs = self.expr_list()?;
+                        self.stream.expect(Token::Symbol(Symbol::RParen))?;
+                        SqlExpr::Function { id, args: exprs }
+                    }
+                    s => bail!("Expect a function, got `{:?}`", s),
+                },
+                symbol => SqlExpr::BinaryExpr {
+                    lhs: Box::new(lhs),
+                    op: symbol.to_string(),
+                    rhs: Box::new(self.parse_expr(bp)?),
+                },
             },
         };
         Ok(expr)
@@ -57,9 +88,10 @@ impl Parser {
 
     fn parse_expr(&mut self, min_power: u8) -> Result<SqlExpr> {
         let mut lhs = self.prefix()?;
-        // TODO: token can be other than symbol
-        while let Some(Token::Symbol(op)) = self.stream.peek().map(|s| s.token) {
-            let bp = infix_power(op);
+        while let Ok(op) = self.stream.peek_token() {
+            let Some(bp) = infix_power(&op) else {
+                break;
+            };
             if bp <= min_power {
                 break;
             }
@@ -75,12 +107,42 @@ impl Parser {
     fn select(&mut self) -> Result<SqlExpr> {
         let exprs = self.expr_list()?;
         self.stream.expect(Token::Keyword(Keyword::From))?;
-        let Some(Token::Literal(Literal::Indentifier(table))) = self.stream.next().map(|s| s.token)
-        else {
-            bail!("Expect `FROM` table in select statement")
+        let Ok(Token::Literal(Literal::Identifier(table))) = self.stream.next_token() else {
+            bail!(
+                "Expect `FROM` table in select statement\n{}",
+                self.stream.context()
+            )
         };
+
+        // WHERE
+        let filter = match self.stream.consume(&[Token::Keyword(Keyword::Where)]) {
+            true => {
+                let expr = self.parse()?;
+                Some(Box::new(expr))
+            }
+            false => None,
+        };
+
+        // GROUP BY
+        let group_by = match self.stream.consume(&[Token::Keyword(Keyword::GroupBy)]) {
+            true => self.expr_list()?,
+            false => vec![],
+        };
+
+        // HAVING
+        let having = match self.stream.consume(&[Token::Keyword(Keyword::Having)]) {
+            true => {
+                let expr = self.parse()?;
+                Some(Box::new(expr))
+            }
+            false => None,
+        };
+
         let select = SqlExpr::Select {
             projection: exprs,
+            filter,
+            group_by,
+            having,
             table_name: SqlIdentifier(table),
         };
         Ok(select)
@@ -90,9 +152,9 @@ impl Parser {
         let mut exprs = vec![];
         while let Ok(expr) = self.parse() {
             exprs.push(expr);
-            match self.stream.peek().map(|s| s.token) {
-                Some(Token::Symbol(Symbol::Comma)) => {
-                    self.stream.next().with_context(|| "No remaining tokens")?;
+            match self.stream.peek_token() {
+                Ok(Token::Symbol(Symbol::Comma)) => {
+                    self.stream.next_token()?;
                     continue;
                 }
                 _ => break,
@@ -103,22 +165,32 @@ impl Parser {
 }
 
 // TODO: power other than symbol
-pub fn infix_power(symbol: Symbol) -> u8 {
-    match symbol {
-        Symbol::Plus => 10,
-        Symbol::Minus => 10,
-        Symbol::Multiply => 20,
-        Symbol::Comma => 0,
-    }
-}
-
-// TODO: power other than symbol
-pub fn prefix_power(symbol: Symbol) -> u8 {
-    match symbol {
-        Symbol::Plus => 10,
-        Symbol::Minus => 10,
-        Symbol::Multiply => 20,
-        Symbol::Comma => 0,
+pub fn infix_power(token: &Token) -> Option<u8> {
+    match token {
+        Token::Keyword(keyword) => match keyword {
+            Keyword::Select => None,
+            Keyword::From => None,
+            Keyword::Where => None,
+            Keyword::As => Some(10),
+            Keyword::And => Some(10),
+            Keyword::Avg => todo!(),
+            Keyword::GroupBy => None,
+            Keyword::OrderBy => todo!(),
+            Keyword::Having => None,
+        },
+        Token::Literal(_literal) => todo!(),
+        Token::Symbol(symbol) => match symbol {
+            Symbol::Plus => Some(50),
+            Symbol::Minus => Some(50),
+            Symbol::Multiply => Some(60),
+            Symbol::Divide => Some(60),
+            Symbol::Eq => Some(30),
+            Symbol::Le => Some(40),
+            Symbol::Ge => Some(40),
+            Symbol::Comma => Some(0),
+            Symbol::LParen => Some(70),
+            Symbol::RParen => None,
+        },
     }
 }
 
@@ -137,7 +209,7 @@ mod test {
         let tokenizer = Tokenizer::new(sql);
         let stream = tokenizer.stream()?;
         let mut parser = Parser::new(stream);
-        let expr = parser.parse().unwrap();
+        let expr = parser.parse()?;
         Ok(expr)
     }
 
@@ -199,39 +271,209 @@ mod test {
     }
 
     #[test]
-    fn select() -> Result<()> {
-        assert_debug_snapshot!(parse("SELECT 1 + 2, 2 + 3, name FROM employee")?, @r#"
+    fn select_1() -> Result<()> {
+        assert_debug_snapshot!(parse(r#"
+SELECT id, first_name, salary * 1.1 AS new_salary
+FROM employee
+WHERE state = 'CO'
+"#)?, @r#"
         Select {
             projection: [
-                BinaryExpr {
-                    lhs: Long(
-                        1,
-                    ),
-                    op: "+",
-                    rhs: Long(
-                        2,
-                    ),
-                },
-                BinaryExpr {
-                    lhs: Long(
-                        2,
-                    ),
-                    op: "+",
-                    rhs: Long(
-                        3,
-                    ),
-                },
                 Indentifier(
                     SqlIdentifier(
-                        "name",
+                        "id",
                     ),
                 ),
+                Indentifier(
+                    SqlIdentifier(
+                        "first_name",
+                    ),
+                ),
+                Alias {
+                    expr: BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "salary",
+                            ),
+                        ),
+                        op: "*",
+                        rhs: Double(
+                            1.1,
+                        ),
+                    },
+                    alias: SqlIdentifier(
+                        "new_salary",
+                    ),
+                },
             ],
+            filter: Some(
+                BinaryExpr {
+                    lhs: Indentifier(
+                        SqlIdentifier(
+                            "state",
+                        ),
+                    ),
+                    op: "=",
+                    rhs: String(
+                        "CO",
+                    ),
+                },
+            ),
+            group_by: [],
+            having: None,
             table_name: SqlIdentifier(
                 "employee",
             ),
         }
         "#);
+        Ok(())
+    }
+
+    #[test]
+    fn select_2() -> Result<()> {
+        assert_debug_snapshot!(parse(r#"
+SELECT id, first_name, salary/12 AS monthly_salary
+FROM employee
+WHERE state = 'CO' AND monthly_salary > 1000
+        "#)?, @r#"
+        Select {
+            projection: [
+                Indentifier(
+                    SqlIdentifier(
+                        "id",
+                    ),
+                ),
+                Indentifier(
+                    SqlIdentifier(
+                        "first_name",
+                    ),
+                ),
+                Alias {
+                    expr: BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "salary",
+                            ),
+                        ),
+                        op: "/",
+                        rhs: Long(
+                            12,
+                        ),
+                    },
+                    alias: SqlIdentifier(
+                        "monthly_salary",
+                    ),
+                },
+            ],
+            filter: Some(
+                BinaryExpr {
+                    lhs: BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "state",
+                            ),
+                        ),
+                        op: "=",
+                        rhs: String(
+                            "CO",
+                        ),
+                    },
+                    op: "AND",
+                    rhs: BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "monthly_salary",
+                            ),
+                        ),
+                        op: ">",
+                        rhs: Long(
+                            1000,
+                        ),
+                    },
+                },
+            ),
+            group_by: [],
+            having: None,
+            table_name: SqlIdentifier(
+                "employee",
+            ),
+        }
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_3() -> Result<()> {
+        assert_debug_snapshot!(parse(r#"
+SELECT department, AVG(salary) AS avg_salary
+FROM employee
+WHERE state = 'CO'
+GROUP BY department
+HAVING avg_salary > 50000
+        "#)?, @r#"
+        Select {
+            projection: [
+                Indentifier(
+                    SqlIdentifier(
+                        "department",
+                    ),
+                ),
+                Alias {
+                    expr: Function {
+                        id: "AVG",
+                        args: [
+                            Indentifier(
+                                SqlIdentifier(
+                                    "salary",
+                                ),
+                            ),
+                        ],
+                    },
+                    alias: SqlIdentifier(
+                        "avg_salary",
+                    ),
+                },
+            ],
+            filter: Some(
+                BinaryExpr {
+                    lhs: Indentifier(
+                        SqlIdentifier(
+                            "state",
+                        ),
+                    ),
+                    op: "=",
+                    rhs: String(
+                        "CO",
+                    ),
+                },
+            ),
+            group_by: [
+                Indentifier(
+                    SqlIdentifier(
+                        "department",
+                    ),
+                ),
+            ],
+            having: Some(
+                BinaryExpr {
+                    lhs: Indentifier(
+                        SqlIdentifier(
+                            "avg_salary",
+                        ),
+                    ),
+                    op: ">",
+                    rhs: Long(
+                        50000,
+                    ),
+                },
+            ),
+            table_name: SqlIdentifier(
+                "employee",
+            ),
+        }
+        "#);
+
         Ok(())
     }
 }

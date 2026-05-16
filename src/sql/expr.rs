@@ -30,6 +30,9 @@ pub enum SqlExpr {
     },
     Select {
         projection: Vec<SqlExpr>,
+        filter: Option<Box<SqlExpr>>,
+        group_by: Vec<SqlExpr>,
+        having: Option<Box<SqlExpr>>,
         table_name: SqlIdentifier,
         // TODO: add more fields
     },

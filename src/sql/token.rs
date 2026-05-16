@@ -13,6 +13,12 @@ pub enum Keyword {
     Select,
     From,
     Where,
+    As,
+    And,
+    Avg,
+    GroupBy,
+    OrderBy,
+    Having,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -20,7 +26,7 @@ pub enum Literal {
     Long(i64),
     Double(f64),
     String(String),
-    Indentifier(String),
+    Identifier(String),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -28,7 +34,13 @@ pub enum Symbol {
     Plus,
     Minus,
     Multiply,
+    Divide,
+    Eq,
+    Le,
+    Ge,
     Comma,
+    LParen,
+    RParen,
 }
 
 impl Eq for Literal {}
@@ -41,6 +53,10 @@ impl TryFrom<&str> for Keyword {
             "select" => Keyword::Select,
             "from" => Keyword::From,
             "where" => Keyword::Where,
+            "as" => Keyword::As,
+            "and" => Keyword::And,
+            "avg" => Keyword::Avg,
+            "having" => Keyword::Having,
             s => bail!("invalid keyword {}", s),
         };
         Ok(keyword)
@@ -62,10 +78,10 @@ impl TryFrom<&str> for Literal {
         if value.starts_with("'") {
             match value.strip_prefix("'").and_then(|v| v.strip_suffix("'")) {
                 Some(value) => Ok(Literal::String(value.to_string())),
-                None => bail!("unterminated literal string"),
+                None => bail!("unterminated literal string `{}`", value),
             }
         } else {
-            Ok(Literal::Indentifier(value.to_string()))
+            Ok(Literal::Identifier(value.to_string()))
         }
     }
 }
@@ -78,7 +94,13 @@ impl TryFrom<&str> for Symbol {
             "+" => Symbol::Plus,
             "-" => Symbol::Minus,
             "*" => Symbol::Multiply,
+            "/" => Symbol::Divide,
+            "=" => Symbol::Eq,
+            "<" => Symbol::Le,
+            ">" => Symbol::Ge,
             "," => Symbol::Comma,
+            "(" => Symbol::LParen,
+            ")" => Symbol::RParen,
             c => bail!("invalid symbol {}", c),
         };
         Ok(symbol)
@@ -101,6 +123,12 @@ impl Display for Keyword {
             Keyword::Select => write!(f, "SELECT"),
             Keyword::From => write!(f, "FROM"),
             Keyword::Where => write!(f, "WHERE"),
+            Keyword::As => write!(f, "AS"),
+            Keyword::And => write!(f, "AND"),
+            Keyword::Avg => write!(f, "AVG"),
+            Keyword::GroupBy => write!(f, "GROUP BY"),
+            Keyword::OrderBy => write!(f, "ORDER BY"),
+            Keyword::Having => write!(f, "HAVING"),
         }
     }
 }
@@ -110,8 +138,8 @@ impl Display for Literal {
         match self {
             Literal::Long(v) => write!(f, "{}", v),
             Literal::Double(v) => write!(f, "{}", v),
-            Literal::String(v) => write!(f, "{}", v),
-            Literal::Indentifier(v) => write!(f, "{}", v),
+            Literal::String(v) => write!(f, "'{}'", v),
+            Literal::Identifier(v) => write!(f, "#{}", v),
         }
     }
 }
@@ -122,7 +150,13 @@ impl Display for Symbol {
             Symbol::Plus => write!(f, "+"),
             Symbol::Minus => write!(f, "-"),
             Symbol::Multiply => write!(f, "*"),
+            Symbol::Divide => write!(f, "/"),
+            Symbol::Eq => write!(f, "="),
+            Symbol::Le => write!(f, "<"),
+            Symbol::Ge => write!(f, ">"),
             Symbol::Comma => write!(f, ","),
+            Symbol::LParen => write!(f, "("),
+            Symbol::RParen => write!(f, ")"),
         }
     }
 }
