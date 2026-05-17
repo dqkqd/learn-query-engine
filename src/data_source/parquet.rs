@@ -6,6 +6,7 @@ use parquet::arrow::{ProjectionMask, arrow_reader::ParquetRecordBatchReaderBuild
 
 use crate::data_source::DataSource;
 
+#[derive(Debug, Clone)]
 pub struct ParquetDataSource {
     filepath: PathBuf,
 }

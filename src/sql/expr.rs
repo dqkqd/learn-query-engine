@@ -28,17 +28,20 @@ pub enum SqlExpr {
         // TODO: enum
         asc: bool,
     },
-    Select {
-        projection: Vec<SqlExpr>,
-        filter: Option<Box<SqlExpr>>,
-        group_by: Vec<SqlExpr>,
-        having: Option<Box<SqlExpr>>,
-        table_name: SqlIdentifier,
-        // TODO: add more fields
-    },
+    Select(Select),
 }
 
 impl Eq for SqlExpr {}
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SqlIdentifier(pub String);
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Select {
+    pub projection: Vec<SqlExpr>,
+    pub filter: Option<Box<SqlExpr>>,
+    pub group_by: Vec<SqlExpr>,
+    pub having: Option<Box<SqlExpr>>,
+    pub table_name: SqlIdentifier,
+    // TODO: add more fields
+}

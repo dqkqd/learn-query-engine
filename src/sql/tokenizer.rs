@@ -139,12 +139,19 @@ impl Tokenizer {
     /// Scan symbol
     fn scan_symbol(&mut self) -> Result<TokenSpan> {
         let position = self.get_position(|b| !SYMBOL_SET.contains(b), None);
-        let token = self.get_string(self.position, position)?;
-        let token = Symbol::try_from(token.as_str())?;
-        let token = Token::Symbol(token);
-        let token_span = TokenSpan::new(token, self.position, position);
-        self.position = token_span.end;
-        Ok(token_span)
+        for p in (self.position + 1..position + 1).rev() {
+            let token = self.get_string(self.position, p)?;
+            if let Ok(token) = Symbol::try_from(token.as_str()) {
+                let token = Token::Symbol(token);
+                let token_span = TokenSpan::new(token, self.position, p);
+                self.position = token_span.end;
+                return Ok(token_span);
+            };
+        }
+        bail!(
+            "invalid symbol set: `{}`",
+            self.get_string(self.position, position)?
+        )
     }
 
     /// Scan string including quotes
@@ -308,6 +315,21 @@ HAVING avg_salary > 50000
         assert_snapshot!(
             tokens_to_string(tokens),
             @"SELECT #department , AVG ( #salary ) AS #avg_salary FROM #employee WHERE #state = 'CO' GROUP BY #department HAVING #avg_salary > 50000",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn select_4() -> Result<()> {
+        let tokens = tokens(
+            r#"
+SELECT MAX(salary), state FROM employee GROUP BY state
+"#,
+        )?;
+
+        assert_snapshot!(
+            tokens_to_string(tokens),
+            @"SELECT #MAX ( #salary ) , #state FROM #employee GROUP BY #state",
         );
         Ok(())
     }

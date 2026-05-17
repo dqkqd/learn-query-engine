@@ -7,6 +7,7 @@ use std::{fmt::Display, sync::Arc};
 
 use crate::{data_source::DataSource, logical_plan::expr::LogicalExpr};
 
+#[derive(Debug, Clone)]
 pub enum LogicalPlan {
     Scan(Scan),
     Selection(Selection),
@@ -15,28 +16,33 @@ pub enum LogicalPlan {
     Join(Join),
 }
 
+#[derive(Debug, Clone)]
 pub struct Scan {
     pub path: String,
-    pub data_source: Box<dyn DataSource>,
+    pub data_source: Arc<dyn DataSource>,
     pub projection: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Selection {
     pub input: Box<LogicalPlan>,
-    pub expr: LogicalExpr,
+    pub expr: Arc<LogicalExpr>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Projection {
     pub input: Box<LogicalPlan>,
-    pub expr: Vec<LogicalExpr>,
+    pub expr: Vec<Arc<LogicalExpr>>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Aggregate {
     pub input: Box<LogicalPlan>,
-    pub group_expr: Vec<LogicalExpr>,
-    pub aggregate_expr: Vec<LogicalExpr>,
+    pub group_expr: Vec<Arc<LogicalExpr>>,
+    pub aggregate_expr: Vec<Arc<LogicalExpr>>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Join {
     pub left: Box<LogicalPlan>,
     pub right: Box<LogicalPlan>,
@@ -44,6 +50,7 @@ pub struct Join {
     pub on: Vec<(String, String)>,
 }
 
+#[derive(Debug, Clone)]
 pub enum JoinType {
     Inner,
     Left,
@@ -220,7 +227,7 @@ impl Display for Aggregate {
         let aggregate: Vec<String> = self.aggregate_expr.iter().map(|e| e.to_string()).collect();
         write!(
             f,
-            "Aggregate: group_expr={}, aggregate_expr={}",
+            "Aggregate: group_expr=[{}], aggregate_expr=[{}]",
             groups.join(", "),
             aggregate.join(", ")
         )
@@ -250,6 +257,8 @@ impl Display for Join {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use anyhow::Result;
     use arrow::array::record_batch;
     use insta::assert_snapshot;
@@ -281,7 +290,7 @@ mod test {
     fn test_scan() -> Result<()> {
         let plan = LogicalPlan::Scan(Scan {
             path: "users".to_string(),
-            data_source: Box::new(data_source()?),
+            data_source: Arc::new(data_source()?),
             projection: vec!["name".to_string()],
         });
         assert_snapshot!(plan.to_string(), @"Scan: users; projection=[name]");
@@ -292,16 +301,16 @@ mod test {
     fn test_selection() -> Result<()> {
         let scan = LogicalPlan::Scan(Scan {
             path: "users".to_string(),
-            data_source: Box::new(data_source()?),
+            data_source: Arc::new(data_source()?),
             projection: vec!["name".to_string()],
         });
         let plan = LogicalPlan::Selection(Selection {
             input: Box::new(scan),
-            expr: LogicalExpr::Binary {
-                left: Box::new(LogicalExpr::Column("name".to_string())),
+            expr: Arc::new(LogicalExpr::Binary {
+                lhs: Arc::new(LogicalExpr::Column("name".to_string())),
                 op: BinaryOp::Eq,
-                right: Box::new(LogicalExpr::Literal(Literal::String("Alice".to_string()))),
-            },
+                rhs: Arc::new(LogicalExpr::Literal(Literal::String("Alice".to_string()))),
+            }),
         });
         assert_snapshot!(plan.to_string(), @"
         Filter: #name = 'Alice'
@@ -314,33 +323,33 @@ mod test {
     fn test_compose() -> Result<()> {
         let scan = LogicalPlan::Scan(Scan {
             path: "employees".to_string(),
-            data_source: Box::new(data_source()?),
+            data_source: Arc::new(data_source()?),
             projection: vec![],
         });
 
         let filter = LogicalPlan::Selection(Selection {
             input: Box::new(scan),
-            expr: LogicalExpr::Binary {
-                left: Box::new(LogicalExpr::Column("department".to_string())),
+            expr: Arc::new(LogicalExpr::Binary {
+                lhs: Arc::new(LogicalExpr::Column("department".to_string())),
                 op: BinaryOp::Eq,
-                right: Box::new(LogicalExpr::Literal(Literal::String(
+                rhs: Arc::new(LogicalExpr::Literal(Literal::String(
                     "Engineering".to_string(),
                 ))),
-            },
+            }),
         });
 
         let project = LogicalPlan::Projection(Projection {
             input: Box::new(filter),
             expr: vec![
-                LogicalExpr::Column("name".to_string()),
-                LogicalExpr::Alias {
-                    expr: Box::new(LogicalExpr::Binary {
-                        left: Box::new(LogicalExpr::Column("salary".to_string())),
+                Arc::new(LogicalExpr::Column("name".to_string())),
+                Arc::new(LogicalExpr::Alias {
+                    expr: Arc::new(LogicalExpr::Binary {
+                        lhs: Arc::new(LogicalExpr::Column("salary".to_string())),
                         op: BinaryOp::Eq,
-                        right: Box::new(LogicalExpr::Literal(Literal::Double(1.1))),
+                        rhs: Arc::new(LogicalExpr::Literal(Literal::Double(1.1))),
                     }),
                     alias: "new_salary".to_string(),
-                },
+                }),
             ],
         });
 

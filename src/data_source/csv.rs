@@ -10,6 +10,7 @@ use arrow::{
 
 use crate::data_source::DataSource;
 
+#[derive(Debug, Clone)]
 pub struct CsvDataSource {
     filepath: PathBuf,
 }
@@ -23,6 +24,7 @@ impl CsvDataSource {
 
 impl DataSource for CsvDataSource {
     fn schema(&self) -> Result<Arc<Schema>> {
+        // TODO: this is a costly operation, consider caching it
         if !self.filepath.exists() {
             bail!("file doesn't exist: {:?}", self.filepath);
         }

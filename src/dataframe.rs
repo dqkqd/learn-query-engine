@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 
 use crate::{
@@ -8,6 +10,7 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone)]
 pub struct DataFrame {
     plan: LogicalPlan,
 }
@@ -19,25 +22,33 @@ impl ExecutionContext {
         let data_source = CsvDataSource::new(&filename);
         let plan = LogicalPlan::Scan(Scan {
             path: filename.as_ref().to_string(),
-            data_source: Box::new(data_source),
+            data_source: Arc::new(data_source),
             projection: vec![],
         });
-        Ok(DataFrame { plan })
+        Ok(DataFrame::new(plan))
     }
 
     pub fn parquet(filename: impl AsRef<str>) -> Result<DataFrame> {
         let data_source = ParquetDataSource::new(&filename);
         let plan = LogicalPlan::Scan(Scan {
             path: filename.as_ref().to_string(),
-            data_source: Box::new(data_source),
+            data_source: Arc::new(data_source),
             projection: vec![],
         });
-        Ok(DataFrame { plan })
+        Ok(DataFrame::new(plan))
     }
 }
 
 impl DataFrame {
-    pub fn project(self, expr: Vec<LogicalExpr>) -> DataFrame {
+    pub fn new(plan: LogicalPlan) -> DataFrame {
+        DataFrame { plan }
+    }
+
+    pub fn plan(&self) -> LogicalPlan {
+        self.plan.clone()
+    }
+
+    pub fn project(self, expr: Vec<Arc<LogicalExpr>>) -> DataFrame {
         let plan = LogicalPlan::Projection(Projection {
             input: Box::new(self.plan),
             expr,
@@ -45,7 +56,7 @@ impl DataFrame {
         DataFrame { plan }
     }
 
-    pub fn filter(self, expr: LogicalExpr) -> DataFrame {
+    pub fn filter(self, expr: Arc<LogicalExpr>) -> DataFrame {
         let plan = LogicalPlan::Selection(Selection {
             input: Box::new(self.plan),
             expr,
@@ -53,7 +64,11 @@ impl DataFrame {
         DataFrame { plan }
     }
 
-    pub fn aggregate(self, group_by: Vec<LogicalExpr>, aggregate: Vec<LogicalExpr>) -> DataFrame {
+    pub fn aggregate(
+        self,
+        group_by: Vec<Arc<LogicalExpr>>,
+        aggregate: Vec<Arc<LogicalExpr>>,
+    ) -> DataFrame {
         let plan = LogicalPlan::Aggregate(Aggregate {
             input: Box::new(self.plan),
             group_expr: group_by,
@@ -78,8 +93,12 @@ impl DataFrame {
     }
 }
 
-pub fn col(name: impl AsRef<str>) -> LogicalExpr {
-    LogicalExpr::Column(name.as_ref().to_string())
+pub fn col(name: impl AsRef<str>) -> Arc<LogicalExpr> {
+    Arc::new(LogicalExpr::Column(name.as_ref().to_string()))
+}
+
+pub fn col_index(index: usize) -> Arc<LogicalExpr> {
+    Arc::new(LogicalExpr::ColumnIndex(index))
 }
 
 impl From<&str> for Literal {
@@ -106,71 +125,72 @@ impl From<f64> for Literal {
     }
 }
 
-pub fn lit(value: impl Into<Literal>) -> LogicalExpr {
-    LogicalExpr::Literal(value.into())
+pub fn lit(value: impl Into<Literal>) -> Arc<LogicalExpr> {
+    Arc::new(LogicalExpr::Literal(value.into()))
 }
 
 impl LogicalExpr {
-    pub fn eq(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
+    pub fn eq(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
             op: BinaryOp::Eq,
-            right: Box::new(rhs),
-        }
+            rhs,
+        })
     }
 
-    pub fn neq(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
+    pub fn neq(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
             op: BinaryOp::Neq,
-            right: Box::new(rhs),
-        }
+            rhs,
+        })
     }
 
-    pub fn gt(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
+    pub fn gt(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
             op: BinaryOp::Gt,
-            right: Box::new(rhs),
-        }
+            rhs,
+        })
     }
 
-    pub fn gteq(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
+    pub fn gteq(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
             op: BinaryOp::GtEq,
-            right: Box::new(rhs),
-        }
+            rhs,
+        })
     }
 
-    pub fn lt(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
+    pub fn lt(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
             op: BinaryOp::Lt,
-            right: Box::new(rhs),
-        }
+            rhs,
+        })
     }
-    pub fn lteq(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
+
+    pub fn lteq(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
             op: BinaryOp::LtEq,
-            right: Box::new(rhs),
-        }
+            rhs,
+        })
     }
 
-    pub fn mult(self, rhs: LogicalExpr) -> LogicalExpr {
-        LogicalExpr::Binary {
-            left: Box::new(self),
-            op: BinaryOp::Mult,
-            right: Box::new(rhs),
-        }
+    pub fn mult(self: Arc<LogicalExpr>, rhs: Arc<LogicalExpr>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Binary {
+            lhs: self,
+            op: BinaryOp::Multiply,
+            rhs,
+        })
     }
 
-    pub fn alias(self, alias: impl AsRef<str>) -> LogicalExpr {
-        LogicalExpr::Alias {
-            expr: Box::new(self),
+    pub fn alias(self: Arc<LogicalExpr>, alias: impl AsRef<str>) -> Arc<LogicalExpr> {
+        Arc::new(LogicalExpr::Alias {
+            expr: self,
             alias: alias.as_ref().to_string(),
-        }
+        })
     }
 }
 
@@ -195,7 +215,7 @@ mod test {
             ])
             .filter(col("bonus").gt(lit(1000)));
 
-        assert_snapshot!(df.plan.to_string(), @"
+        assert_snapshot!(df.plan().to_string(), @"
         Filter: #bonus > 1000
           Projection: #id, #first_name, #last_name, #salary, #salary * 0.1 as bonus
             Filter: #state = 'CO'

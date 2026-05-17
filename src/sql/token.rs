@@ -16,6 +16,7 @@ pub enum Keyword {
     As,
     And,
     Avg,
+    Cast,
     GroupBy,
     OrderBy,
     Having,
@@ -51,6 +52,7 @@ impl TryFrom<&str> for Keyword {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let keyword = match value.to_lowercase().as_str() {
             "select" => Keyword::Select,
+            "cast" => Keyword::Cast,
             "from" => Keyword::From,
             "where" => Keyword::Where,
             "as" => Keyword::As,
@@ -101,7 +103,7 @@ impl TryFrom<&str> for Symbol {
             "," => Symbol::Comma,
             "(" => Symbol::LParen,
             ")" => Symbol::RParen,
-            c => bail!("invalid symbol {}", c),
+            c => bail!("invalid symbol `{}`", c),
         };
         Ok(symbol)
     }
@@ -121,6 +123,7 @@ impl Display for Keyword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Keyword::Select => write!(f, "SELECT"),
+            Keyword::Cast => write!(f, "CAST"),
             Keyword::From => write!(f, "FROM"),
             Keyword::Where => write!(f, "WHERE"),
             Keyword::As => write!(f, "AS"),

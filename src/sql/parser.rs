@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 
 use crate::sql::{
-    expr::{SqlExpr, SqlIdentifier},
+    expr::{Select, SqlExpr, SqlIdentifier},
     token::{Keyword, Literal, Symbol, Token},
     token_stream::TokenStream,
 };
@@ -20,6 +20,7 @@ impl Parser {
         let expr = match token {
             Token::Keyword(keyword) => match keyword {
                 Keyword::Select => self.select()?,
+                Keyword::Cast => self.cast()?,
                 Keyword::From => todo!(),
                 Keyword::Where => todo!(),
                 Keyword::As => todo!(),
@@ -47,6 +48,7 @@ impl Parser {
         let expr = match op {
             Token::Keyword(keyword) => match keyword {
                 Keyword::Select => todo!(),
+                Keyword::Cast => todo!(),
                 Keyword::From => todo!(),
                 Keyword::Where => todo!(),
                 Keyword::As => match self.parse_expr(bp)? {
@@ -138,14 +140,30 @@ impl Parser {
             false => None,
         };
 
-        let select = SqlExpr::Select {
+        let select = SqlExpr::Select(Select {
             projection: exprs,
             filter,
             group_by,
             having,
             table_name: SqlIdentifier(table),
-        };
+        });
         Ok(select)
+    }
+
+    fn cast(&mut self) -> Result<SqlExpr> {
+        self.stream.expect(Token::Symbol(Symbol::LParen))?;
+        let expr = self.parse()?;
+        self.stream.expect(Token::Symbol(Symbol::RParen))?;
+
+        let SqlExpr::Alias { expr, alias } = expr else {
+            bail!("CAST should be AS Type")
+        };
+
+        let cast = SqlExpr::Cast {
+            expr,
+            data_type: alias,
+        };
+        Ok(cast)
     }
 
     fn expr_list(&mut self) -> Result<Vec<SqlExpr>> {
@@ -173,6 +191,7 @@ pub fn infix_power(token: &Token) -> Option<u8> {
             Keyword::Where => None,
             Keyword::As => Some(10),
             Keyword::And => Some(10),
+            Keyword::Cast => None,
             Keyword::Avg => todo!(),
             Keyword::GroupBy => None,
             Keyword::OrderBy => todo!(),
@@ -201,17 +220,8 @@ mod test {
 
     use crate::sql::{
         expr::{SqlExpr, SqlIdentifier},
-        parser::Parser,
-        tokenizer::Tokenizer,
+        test::parse,
     };
-
-    fn parse(sql: &str) -> Result<SqlExpr> {
-        let tokenizer = Tokenizer::new(sql);
-        let stream = tokenizer.stream()?;
-        let mut parser = Parser::new(stream);
-        let expr = parser.parse()?;
-        Ok(expr)
-    }
 
     #[test]
     pub fn identifier() -> Result<()> {
@@ -277,54 +287,56 @@ SELECT id, first_name, salary * 1.1 AS new_salary
 FROM employee
 WHERE state = 'CO'
 "#)?, @r#"
-        Select {
-            projection: [
-                Indentifier(
-                    SqlIdentifier(
-                        "id",
-                    ),
-                ),
-                Indentifier(
-                    SqlIdentifier(
-                        "first_name",
-                    ),
-                ),
-                Alias {
-                    expr: BinaryExpr {
-                        lhs: Indentifier(
-                            SqlIdentifier(
-                                "salary",
-                            ),
+        Select(
+            Select {
+                projection: [
+                    Indentifier(
+                        SqlIdentifier(
+                            "id",
                         ),
-                        op: "*",
-                        rhs: Double(
-                            1.1,
+                    ),
+                    Indentifier(
+                        SqlIdentifier(
+                            "first_name",
+                        ),
+                    ),
+                    Alias {
+                        expr: BinaryExpr {
+                            lhs: Indentifier(
+                                SqlIdentifier(
+                                    "salary",
+                                ),
+                            ),
+                            op: "*",
+                            rhs: Double(
+                                1.1,
+                            ),
+                        },
+                        alias: SqlIdentifier(
+                            "new_salary",
                         ),
                     },
-                    alias: SqlIdentifier(
-                        "new_salary",
-                    ),
-                },
-            ],
-            filter: Some(
-                BinaryExpr {
-                    lhs: Indentifier(
-                        SqlIdentifier(
-                            "state",
+                ],
+                filter: Some(
+                    BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "state",
+                            ),
                         ),
-                    ),
-                    op: "=",
-                    rhs: String(
-                        "CO",
-                    ),
-                },
-            ),
-            group_by: [],
-            having: None,
-            table_name: SqlIdentifier(
-                "employee",
-            ),
-        }
+                        op: "=",
+                        rhs: String(
+                            "CO",
+                        ),
+                    },
+                ),
+                group_by: [],
+                having: None,
+                table_name: SqlIdentifier(
+                    "employee",
+                ),
+            },
+        )
         "#);
         Ok(())
     }
@@ -336,68 +348,70 @@ SELECT id, first_name, salary/12 AS monthly_salary
 FROM employee
 WHERE state = 'CO' AND monthly_salary > 1000
         "#)?, @r#"
-        Select {
-            projection: [
-                Indentifier(
-                    SqlIdentifier(
-                        "id",
+        Select(
+            Select {
+                projection: [
+                    Indentifier(
+                        SqlIdentifier(
+                            "id",
+                        ),
                     ),
+                    Indentifier(
+                        SqlIdentifier(
+                            "first_name",
+                        ),
+                    ),
+                    Alias {
+                        expr: BinaryExpr {
+                            lhs: Indentifier(
+                                SqlIdentifier(
+                                    "salary",
+                                ),
+                            ),
+                            op: "/",
+                            rhs: Long(
+                                12,
+                            ),
+                        },
+                        alias: SqlIdentifier(
+                            "monthly_salary",
+                        ),
+                    },
+                ],
+                filter: Some(
+                    BinaryExpr {
+                        lhs: BinaryExpr {
+                            lhs: Indentifier(
+                                SqlIdentifier(
+                                    "state",
+                                ),
+                            ),
+                            op: "=",
+                            rhs: String(
+                                "CO",
+                            ),
+                        },
+                        op: "AND",
+                        rhs: BinaryExpr {
+                            lhs: Indentifier(
+                                SqlIdentifier(
+                                    "monthly_salary",
+                                ),
+                            ),
+                            op: ">",
+                            rhs: Long(
+                                1000,
+                            ),
+                        },
+                    },
                 ),
-                Indentifier(
-                    SqlIdentifier(
-                        "first_name",
-                    ),
+                group_by: [],
+                having: None,
+                table_name: SqlIdentifier(
+                    "employee",
                 ),
-                Alias {
-                    expr: BinaryExpr {
-                        lhs: Indentifier(
-                            SqlIdentifier(
-                                "salary",
-                            ),
-                        ),
-                        op: "/",
-                        rhs: Long(
-                            12,
-                        ),
-                    },
-                    alias: SqlIdentifier(
-                        "monthly_salary",
-                    ),
-                },
-            ],
-            filter: Some(
-                BinaryExpr {
-                    lhs: BinaryExpr {
-                        lhs: Indentifier(
-                            SqlIdentifier(
-                                "state",
-                            ),
-                        ),
-                        op: "=",
-                        rhs: String(
-                            "CO",
-                        ),
-                    },
-                    op: "AND",
-                    rhs: BinaryExpr {
-                        lhs: Indentifier(
-                            SqlIdentifier(
-                                "monthly_salary",
-                            ),
-                        ),
-                        op: ">",
-                        rhs: Long(
-                            1000,
-                        ),
-                    },
-                },
-            ),
-            group_by: [],
-            having: None,
-            table_name: SqlIdentifier(
-                "employee",
-            ),
-        }
+            },
+        )
         "#);
 
         Ok(())
@@ -412,66 +426,68 @@ WHERE state = 'CO'
 GROUP BY department
 HAVING avg_salary > 50000
         "#)?, @r#"
-        Select {
-            projection: [
-                Indentifier(
-                    SqlIdentifier(
-                        "department",
-                    ),
-                ),
-                Alias {
-                    expr: Function {
-                        id: "AVG",
-                        args: [
-                            Indentifier(
-                                SqlIdentifier(
-                                    "salary",
-                                ),
-                            ),
-                        ],
-                    },
-                    alias: SqlIdentifier(
-                        "avg_salary",
-                    ),
-                },
-            ],
-            filter: Some(
-                BinaryExpr {
-                    lhs: Indentifier(
+        Select(
+            Select {
+                projection: [
+                    Indentifier(
                         SqlIdentifier(
-                            "state",
+                            "department",
                         ),
                     ),
-                    op: "=",
-                    rhs: String(
-                        "CO",
-                    ),
-                },
-            ),
-            group_by: [
-                Indentifier(
-                    SqlIdentifier(
-                        "department",
-                    ),
-                ),
-            ],
-            having: Some(
-                BinaryExpr {
-                    lhs: Indentifier(
-                        SqlIdentifier(
+                    Alias {
+                        expr: Function {
+                            id: "AVG",
+                            args: [
+                                Indentifier(
+                                    SqlIdentifier(
+                                        "salary",
+                                    ),
+                                ),
+                            ],
+                        },
+                        alias: SqlIdentifier(
                             "avg_salary",
                         ),
+                    },
+                ],
+                filter: Some(
+                    BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "state",
+                            ),
+                        ),
+                        op: "=",
+                        rhs: String(
+                            "CO",
+                        ),
+                    },
+                ),
+                group_by: [
+                    Indentifier(
+                        SqlIdentifier(
+                            "department",
+                        ),
                     ),
-                    op: ">",
-                    rhs: Long(
-                        50000,
-                    ),
-                },
-            ),
-            table_name: SqlIdentifier(
-                "employee",
-            ),
-        }
+                ],
+                having: Some(
+                    BinaryExpr {
+                        lhs: Indentifier(
+                            SqlIdentifier(
+                                "avg_salary",
+                            ),
+                        ),
+                        op: ">",
+                        rhs: Long(
+                            50000,
+                        ),
+                    },
+                ),
+                table_name: SqlIdentifier(
+                    "employee",
+                ),
+            },
+        )
         "#);
 
         Ok(())

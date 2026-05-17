@@ -5,6 +5,7 @@ use arrow::{array::RecordBatch, datatypes::Schema, error::ArrowError};
 
 use crate::data_source::DataSource;
 
+#[derive(Debug, Clone)]
 pub struct MemoryDataSource {
     schema: Arc<Schema>,
     records: Vec<RecordBatch>,
