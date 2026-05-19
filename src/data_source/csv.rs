@@ -8,7 +8,7 @@ use arrow::{
     error::ArrowError,
 };
 
-use crate::data_source::DataSource;
+use crate::{data_source::DataSource, utils::field_ids_by_names};
 
 #[derive(Debug, Clone)]
 pub struct CsvDataSource {
@@ -40,12 +40,8 @@ impl DataSource for CsvDataSource {
         &self,
         projection: Vec<String>,
     ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
-        let mut field_ids = Vec::with_capacity(projection.len());
         let schema = self.schema()?;
-        for name in projection {
-            let field_id = schema.index_of(&name)?;
-            field_ids.push(field_id);
-        }
+        let field_ids = field_ids_by_names(&schema, &projection)?;
         let file = File::open(&self.filepath)?;
         let mut builder = ReaderBuilder::new(schema).with_header(true);
         if !field_ids.is_empty() {

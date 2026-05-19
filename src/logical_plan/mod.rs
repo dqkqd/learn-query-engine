@@ -5,7 +5,7 @@ use arrow::datatypes::Schema;
 use arrow_schema::Field;
 use std::{fmt::Display, sync::Arc};
 
-use crate::{data_source::DataSource, logical_plan::expr::LogicalExpr};
+use crate::{data_source::DataSource, logical_plan::expr::LogicalExpr, utils::field_ids_by_names};
 
 #[derive(Debug, Clone)]
 pub enum LogicalPlan {
@@ -85,11 +85,7 @@ impl Scan {
         if self.projection.is_empty() {
             Ok(schema)
         } else {
-            let mut field_ids = Vec::with_capacity(self.projection.len());
-            for name in &self.projection {
-                let field_id = schema.index_of(name)?;
-                field_ids.push(field_id);
-            }
+            let field_ids = field_ids_by_names(&schema, &self.projection)?;
             let schema = schema.project(&field_ids)?;
             Ok(Arc::new(schema))
         }
