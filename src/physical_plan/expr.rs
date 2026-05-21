@@ -7,7 +7,6 @@ use arrow::{
 };
 use arrow_schema::ArrowError;
 
-
 pub enum PhysicalExpr {
     Column(usize),
     Literal(PhysicalLiteralExpr),
@@ -33,12 +32,12 @@ pub enum PhysicalBinaryOp {
     // GtEq,
     // Lt,
     // LtEq,
-    //
-    // Plus,
-    // Minus,
-    // Multiply,
-    // Divide,
     // And,
+    //
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 impl PhysicalExpr {
@@ -63,14 +62,29 @@ impl PhysicalExpr {
             PhysicalExpr::Binary(physical_binary_expr) => {
                 let lhs = physical_binary_expr.lhs.evaluate(input)?;
                 let rhs = physical_binary_expr.rhs.evaluate(input)?;
-                let result = match physical_binary_expr.op {
-                    PhysicalBinaryOp::Eq => kernels::cmp::eq(&lhs, &rhs)?,
-                };
-                Arc::new(result)
+                match physical_binary_expr.op {
+                    PhysicalBinaryOp::Eq => Arc::new(kernels::cmp::eq(&lhs, &rhs)?),
+                    PhysicalBinaryOp::Add => kernels::numeric::add(&lhs, &rhs)?,
+                    PhysicalBinaryOp::Sub => kernels::numeric::sub(&lhs, &rhs)?,
+                    PhysicalBinaryOp::Mul => kernels::numeric::mul(&lhs, &rhs)?,
+                    PhysicalBinaryOp::Div => kernels::numeric::div(&lhs, &rhs)?,
+                }
             }
         };
 
         Ok(array)
+    }
+}
+
+impl Display for PhysicalBinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PhysicalBinaryOp::Eq => write!(f, "="),
+            PhysicalBinaryOp::Add => write!(f, "+"),
+            PhysicalBinaryOp::Sub => write!(f, "-"),
+            PhysicalBinaryOp::Mul => write!(f, "*"),
+            PhysicalBinaryOp::Div => write!(f, "/"),
+        }
     }
 }
 
@@ -85,13 +99,11 @@ impl Display for PhysicalExpr {
                 PhysicalLiteralExpr::Long(v) => write!(f, "{}", v),
                 PhysicalLiteralExpr::Double(v) => write!(f, "{}", v),
             },
-            PhysicalExpr::Binary(physical_binary_expr) => match physical_binary_expr.op {
-                PhysicalBinaryOp::Eq => write!(
-                    f,
-                    "{} = {}",
-                    physical_binary_expr.lhs, physical_binary_expr.rhs
-                ),
-            },
+            PhysicalExpr::Binary(physical_binary_expr) => write!(
+                f,
+                "{} {} {}",
+                physical_binary_expr.lhs, physical_binary_expr.op, physical_binary_expr.rhs
+            ),
         }
     }
 }

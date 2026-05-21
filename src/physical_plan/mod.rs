@@ -135,7 +135,7 @@ mod test {
 
     use crate::{
         data_source::{csv::CsvDataSource, memory::MemoryDataSource},
-        physical_plan::expr::PhysicalBinaryExpr,
+        physical_plan::expr::{PhysicalBinaryExpr, PhysicalLiteralExpr},
     };
 
     use super::*;
@@ -218,6 +218,100 @@ column1,column2
         | 5       |
         | 6       |
         +---------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn column_expr() -> Result<()> {
+        let data_source = data_source(
+            r#"
+column1,column2
+1,one
+2,two
+3,three
+4,four
+5,five
+6,six
+"#,
+        )?;
+        let scan = PhysicalPlan::Scan(ScanExec {
+            data_source: Arc::new(data_source),
+            projection: vec![],
+        });
+        let schema = Schema::new(vec![Field::new("from_column_2", DataType::Utf8, false)]);
+        let expr = PhysicalExpr::Column(1);
+        let projection = PhysicalPlan::Projection(ProjectionExec {
+            schema: Arc::new(schema),
+            input: Box::new(scan),
+            expr: vec![expr],
+        });
+        let batch = projection
+            .execute()?
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>();
+        assert_snapshot!(pretty_format_batches(&batch)?, @"
+        +---------------+
+        | from_column_2 |
+        +---------------+
+        | one           |
+        | two           |
+        | three         |
+        | four          |
+        | five          |
+        | six           |
+        +---------------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn literal() -> Result<()> {
+        let data_source = data_source(
+            r#"
+column1,column2
+1,one
+2,two
+3,three
+4,four
+5,five
+6,six
+"#,
+        )?;
+        let scan = PhysicalPlan::Scan(ScanExec {
+            data_source: Arc::new(data_source),
+            projection: vec![],
+        });
+        let schema = Schema::new(vec![
+            Field::new("lit_string", DataType::Utf8, false),
+            Field::new("lit_long", DataType::Int64, false),
+            Field::new("lit_float", DataType::Float64, false),
+        ]);
+        let expr = vec![
+            PhysicalExpr::Literal(PhysicalLiteralExpr::String("lit string".to_string())),
+            PhysicalExpr::Literal(PhysicalLiteralExpr::Long(10)),
+            PhysicalExpr::Literal(PhysicalLiteralExpr::Double(5.0)),
+        ];
+        let projection = PhysicalPlan::Projection(ProjectionExec {
+            schema: Arc::new(schema),
+            input: Box::new(scan),
+            expr,
+        });
+        let batch = projection
+            .execute()?
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>();
+        assert_snapshot!(pretty_format_batches(&batch)?, @"
+        +------------+----------+-----------+
+        | lit_string | lit_long | lit_float |
+        +------------+----------+-----------+
+        | lit string | 10       | 5.0       |
+        | lit string | 10       | 5.0       |
+        | lit string | 10       | 5.0       |
+        | lit string | 10       | 5.0       |
+        | lit string | 10       | 5.0       |
+        | lit string | 10       | 5.0       |
+        +------------+----------+-----------+
         ");
         Ok(())
     }
