@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use arrow::array::{ArrayRef, RecordBatch};
+use arrow::{
+    array::{ArrayRef, AsArray, RecordBatch},
+    compute::filter_record_batch,
+};
 use arrow_schema::{ArrowError, Schema};
 
 use crate::{
@@ -13,6 +16,7 @@ pub mod expr;
 pub enum PhysicalPlan {
     Scan(ScanExec),
     Projection(ProjectionExec),
+    Selection(SelectionExec),
 }
 
 pub struct ScanExec {
@@ -26,11 +30,17 @@ pub struct ProjectionExec {
     expr: Vec<PhysicalExpr>,
 }
 
+pub struct SelectionExec {
+    input: Box<PhysicalPlan>,
+    expr: PhysicalExpr,
+}
+
 impl PhysicalPlan {
     pub fn schema(&self) -> Result<Arc<Schema>> {
         match self {
             PhysicalPlan::Scan(scan_exec) => scan_exec.schema(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.schema(),
+            PhysicalPlan::Selection(selection_exec) => selection_exec.schema(),
         }
     }
 
@@ -38,6 +48,7 @@ impl PhysicalPlan {
         match self {
             PhysicalPlan::Scan(scan_exec) => scan_exec.children(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.children(),
+            PhysicalPlan::Selection(selection_exec) => selection_exec.children(),
         }
     }
 
@@ -47,6 +58,7 @@ impl PhysicalPlan {
         match self {
             PhysicalPlan::Scan(scan_exec) => scan_exec.execute(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.execute(),
+            PhysicalPlan::Selection(selection_exec) => selection_exec.execute(),
         }
     }
 }
@@ -86,6 +98,27 @@ impl ProjectionExec {
                 self.expr.iter().map(|e| e.evaluate(&batch)).collect();
             let columns = columns?;
             RecordBatch::try_new(Arc::clone(&self.schema), columns)
+        });
+        Ok(Box::new(result))
+    }
+}
+
+impl SelectionExec {
+    pub fn schema(&self) -> Result<Arc<Schema>> {
+        self.input.schema()
+    }
+
+    fn children(&self) -> Vec<&PhysicalPlan> {
+        vec![&self.input]
+    }
+
+    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+        let result = self.input.execute()?;
+        let result = result.map(|batch| {
+            let batch = batch?;
+            let predicate = self.expr.evaluate(&batch)?;
+            let predicate = predicate.as_boolean();
+            filter_record_batch(&batch, predicate)
         });
         Ok(Box::new(result))
     }
@@ -235,6 +268,48 @@ column1,column2
         | false |
         | false |
         +-------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn selection_exec() -> Result<()> {
+        let data_source = data_source(
+            r#"
+column1,column2
+a,one
+b,one
+c,two
+d,one
+e,two
+f,three
+"#,
+        )?;
+        let scan = PhysicalPlan::Scan(ScanExec {
+            data_source: Arc::new(data_source),
+            projection: vec![],
+        });
+
+        let expr = PhysicalExpr::Binary(PhysicalBinaryExpr {
+            lhs: Arc::new(PhysicalExpr::Column(1)),
+            op: expr::PhysicalBinaryOp::Eq,
+            rhs: Arc::new(PhysicalExpr::Literal(expr::PhysicalLiteralExpr::String(
+                "one".to_string(),
+            ))),
+        });
+        let selection = PhysicalPlan::Selection(SelectionExec {
+            input: Box::new(scan),
+            expr,
+        });
+        let batch = selection.execute()?.map(|v| v.unwrap()).collect::<Vec<_>>();
+        assert_snapshot!(pretty_format_batches(&batch)?, @"
+        +---------+---------+
+        | column1 | column2 |
+        +---------+---------+
+        | a       | one     |
+        | b       | one     |
+        | d       | one     |
+        +---------+---------+
         ");
         Ok(())
     }
