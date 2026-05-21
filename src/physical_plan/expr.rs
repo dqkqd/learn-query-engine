@@ -7,24 +7,29 @@ use arrow::{
 };
 use arrow_schema::ArrowError;
 
+
+#[derive(Debug)]
 pub enum PhysicalExpr {
     Column(usize),
     Literal(PhysicalLiteralExpr),
     Binary(PhysicalBinaryExpr),
 }
 
+#[derive(Debug)]
 pub enum PhysicalLiteralExpr {
     String(String),
     Long(i64),
     Double(f64),
 }
 
+#[derive(Debug)]
 pub struct PhysicalBinaryExpr {
     pub lhs: Arc<PhysicalExpr>,
     pub op: PhysicalBinaryOp,
     pub rhs: Arc<PhysicalExpr>,
 }
 
+#[derive(Debug)]
 pub enum PhysicalBinaryOp {
     Eq,
     // Neq,

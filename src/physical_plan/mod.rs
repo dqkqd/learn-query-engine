@@ -1,22 +1,30 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Result;
 use arrow::{
-    array::{ArrayRef, AsArray, RecordBatch},
+    array::{ArrayRef, AsArray, RecordBatch, new_null_array},
     compute::filter_record_batch,
+    row::{OwnedRow, RowConverter, SortField},
 };
 use arrow_schema::{ArrowError, Schema};
 
 use crate::{
-    data_source::DataSource, physical_plan::expr::PhysicalExpr, utils::field_ids_by_names,
+    data_source::DataSource,
+    physical_plan::{
+        aggregate::{Accumulator, PhysicalAggregateExpr},
+        expr::PhysicalExpr,
+    },
+    utils::field_ids_by_names,
 };
 
+pub mod aggregate;
 pub mod expr;
 
 pub enum PhysicalPlan {
     Scan(ScanExec),
     Projection(ProjectionExec),
     Selection(SelectionExec),
+    HashAggregate(HashAggregrateExec),
 }
 
 pub struct ScanExec {
@@ -35,12 +43,20 @@ pub struct SelectionExec {
     expr: PhysicalExpr,
 }
 
+pub struct HashAggregrateExec {
+    schema: Arc<Schema>,
+    input: Box<PhysicalPlan>,
+    group_expr: Vec<PhysicalExpr>,
+    aggregate_expr: Vec<PhysicalAggregateExpr>,
+}
+
 impl PhysicalPlan {
     pub fn schema(&self) -> Result<Arc<Schema>> {
         match self {
             PhysicalPlan::Scan(scan_exec) => scan_exec.schema(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.schema(),
             PhysicalPlan::Selection(selection_exec) => selection_exec.schema(),
+            PhysicalPlan::HashAggregate(hash_aggregrate_exec) => hash_aggregrate_exec.schema(),
         }
     }
 
@@ -49,6 +65,7 @@ impl PhysicalPlan {
             PhysicalPlan::Scan(scan_exec) => scan_exec.children(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.children(),
             PhysicalPlan::Selection(selection_exec) => selection_exec.children(),
+            PhysicalPlan::HashAggregate(hash_aggregrate_exec) => hash_aggregrate_exec.children(),
         }
     }
 
@@ -59,6 +76,7 @@ impl PhysicalPlan {
             PhysicalPlan::Scan(scan_exec) => scan_exec.execute(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.execute(),
             PhysicalPlan::Selection(selection_exec) => selection_exec.execute(),
+            PhysicalPlan::HashAggregate(hash_aggregrate_exec) => hash_aggregrate_exec.execute(),
         }
     }
 }
@@ -121,6 +139,97 @@ impl SelectionExec {
             filter_record_batch(&batch, predicate)
         });
         Ok(Box::new(result))
+    }
+}
+
+impl HashAggregrateExec {
+    pub fn schema(&self) -> Result<Arc<Schema>> {
+        Ok(Arc::clone(&self.schema))
+    }
+
+    fn children(&self) -> Vec<&PhysicalPlan> {
+        vec![&self.input]
+    }
+
+    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+        let mut map: BTreeMap<OwnedRow, Vec<Accumulator>> = BTreeMap::new();
+        let data_types = self
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type())
+            .collect::<Vec<_>>();
+
+        let group_by_data_types = data_types
+            .iter()
+            .map(|&d| SortField::new(d.clone()))
+            .take(self.group_expr.len())
+            .collect::<Vec<_>>();
+        let group_by_row_converter = RowConverter::new(group_by_data_types)?;
+
+        for batch in self.input.execute()? {
+            let batch = batch?;
+
+            let aggregate_input: Result<Vec<ArrayRef>, ArrowError> = self
+                .aggregate_expr
+                .iter()
+                .map(|v| v.input().evaluate(&batch))
+                .collect();
+            let aggregate_input = aggregate_input?;
+
+            let group_keys: Result<Vec<ArrayRef>, ArrowError> = self
+                .group_expr
+                .iter()
+                .map(|expr| expr.evaluate(&batch))
+                .collect();
+            let group_keys = group_keys?;
+            let rows = group_by_row_converter.convert_columns(&group_keys)?;
+
+            for (row_index, row) in rows.iter().enumerate() {
+                let row_key = row.owned();
+                let accumulators = map.entry(row_key).or_insert_with(|| {
+                    self.aggregate_expr
+                        .iter()
+                        .map(|e| e.accumulator())
+                        .collect()
+                });
+
+                for (input, accum) in aggregate_input.iter().zip(accumulators.iter_mut()) {
+                    let row = input.slice(row_index, 1);
+                    accum.accumulate(row)?;
+                }
+            }
+        }
+
+        // group by columns
+        let keys = map.keys().map(|r| r.row()).collect::<Vec<_>>();
+        let mut columns = group_by_row_converter.convert_rows(keys)?;
+
+        let aggregated_rows = map
+            .values()
+            .map(|accumulators| {
+                accumulators
+                    .iter()
+                    .map(|accum| accum.value())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for column_index in 0..self.aggregate_expr.len() {
+            let data_type = data_types[self.group_expr.len() + column_index];
+            let column = aggregated_rows
+                .iter()
+                .map(|row| match &row[column_index] {
+                    Some(v) => v.clone(),
+                    None => new_null_array(data_type, 1),
+                })
+                .collect::<Vec<_>>();
+            let column = column.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+            let column = arrow::compute::kernels::concat::concat(&column)?;
+            columns.push(column)
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+        Ok(Box::new(std::iter::once(Ok(batch))))
     }
 }
 
@@ -404,6 +513,115 @@ f,three
         | b       | one     |
         | d       | one     |
         +---------+---------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_exec() -> Result<()> {
+        // SELECT MAX(students) GROUP BY class;
+        let data_source = data_source(
+            r#"
+class,group,students
+A,one,10
+A,two,20
+A,three,40
+B,one,30
+B,two,30
+B,three,20
+"#,
+        )?;
+        let scan = PhysicalPlan::Scan(ScanExec {
+            data_source: Arc::new(data_source),
+            projection: vec![],
+        });
+
+        // the returned schema, contains class and max(students)
+        let schema = Schema::new(vec![
+            Field::new("class", DataType::Utf8, false),
+            Field::new("max(students)", DataType::Int64, false),
+        ]);
+
+        // column: class
+        let group_expr = vec![PhysicalExpr::Column(0)];
+        // max(students)
+        let aggregate_expr = vec![PhysicalAggregateExpr::Max(PhysicalExpr::Column(2))];
+
+        let aggregation = PhysicalPlan::HashAggregate(HashAggregrateExec {
+            schema: Arc::new(schema),
+            input: Box::new(scan),
+            group_expr,
+            aggregate_expr,
+        });
+        let batch = aggregation
+            .execute()?
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>();
+        assert_snapshot!(pretty_format_batches(&batch)?, @"
+        +-------+---------------+
+        | class | max(students) |
+        +-------+---------------+
+        | A     | 40            |
+        | B     | 30            |
+        +-------+---------------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_exec_multiple_group_bys_multiple_aggragate() -> Result<()> {
+        // SELECT MAX(avg_points), SUM(students) GROUP BY class, group;
+        let data_source = data_source(
+            r#"
+class,group,students,avg_points
+A,one,10,1
+A,one,20,2
+A,two,40,4
+B,one,30,3
+B,one,30,3
+B,two,20,2
+"#,
+        )?;
+        let scan = PhysicalPlan::Scan(ScanExec {
+            data_source: Arc::new(data_source),
+            projection: vec![],
+        });
+
+        // the returned schema, contains class and max(students)
+        let schema = Schema::new(vec![
+            Field::new("class", DataType::Utf8, false),
+            Field::new("group", DataType::Utf8, false),
+            Field::new("max(avg_points)", DataType::Int64, false),
+            Field::new("sum(students)", DataType::Int64, false),
+        ]);
+
+        // column: class
+        let group_expr = vec![PhysicalExpr::Column(0), PhysicalExpr::Column(1)];
+        // max(avg_points), sum(students)
+        let aggregate_expr = vec![
+            PhysicalAggregateExpr::Max(PhysicalExpr::Column(3)),
+            PhysicalAggregateExpr::Sum(PhysicalExpr::Column(2)),
+        ];
+
+        let aggregation = PhysicalPlan::HashAggregate(HashAggregrateExec {
+            schema: Arc::new(schema),
+            input: Box::new(scan),
+            group_expr,
+            aggregate_expr,
+        });
+        let batch = aggregation
+            .execute()?
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>();
+        assert_snapshot!(pretty_format_batches(&batch)?, @"
+        +-------+-------+-----------------+---------------+
+        | class | group | max(avg_points) | sum(students) |
+        +-------+-------+-----------------+---------------+
+        | A     | one   | 2               | 30            |
+        | A     | two   | 4               | 40            |
+        | B     | one   | 3               | 60            |
+        | B     | two   | 2               | 20            |
+        +-------+-------+-----------------+---------------+
         ");
         Ok(())
     }
