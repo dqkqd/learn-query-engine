@@ -9,4 +9,3 @@ pub fn field_ids_by_names(schema: &Schema, projection: &[String]) -> Result<Vec<
     }
     Ok(field_ids)
 }
-

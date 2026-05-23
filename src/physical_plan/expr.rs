@@ -7,7 +7,6 @@ use arrow::{
 };
 use arrow_schema::ArrowError;
 
-
 #[derive(Debug)]
 pub enum PhysicalExpr {
     Column(usize),
