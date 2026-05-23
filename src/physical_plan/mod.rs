@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, fmt::Display, sync::Arc};
 
 use anyhow::Result;
 use arrow::{
@@ -33,21 +33,21 @@ pub struct ScanExec {
 }
 
 pub struct ProjectionExec {
-    schema: Arc<Schema>,
-    input: Box<PhysicalPlan>,
-    expr: Vec<PhysicalExpr>,
+    pub schema: Arc<Schema>,
+    pub input: Box<PhysicalPlan>,
+    pub expr: Vec<PhysicalExpr>,
 }
 
 pub struct SelectionExec {
-    input: Box<PhysicalPlan>,
-    expr: PhysicalExpr,
+    pub input: Box<PhysicalPlan>,
+    pub expr: PhysicalExpr,
 }
 
 pub struct HashAggregrateExec {
-    schema: Arc<Schema>,
-    input: Box<PhysicalPlan>,
-    group_expr: Vec<PhysicalExpr>,
-    aggregate_expr: Vec<PhysicalAggregateExpr>,
+    pub schema: Arc<Schema>,
+    pub input: Box<PhysicalPlan>,
+    pub group_expr: Vec<PhysicalExpr>,
+    pub aggregate_expr: Vec<PhysicalAggregateExpr>,
 }
 
 impl PhysicalPlan {
@@ -84,9 +84,13 @@ impl PhysicalPlan {
 impl ScanExec {
     pub fn schema(&self) -> Result<Arc<Schema>> {
         let schema = self.data_source.schema()?;
-        let field_ids = field_ids_by_names(&schema, &self.projection)?;
-        let schema = schema.project(&field_ids)?;
-        Ok(Arc::new(schema))
+        let schema = if !self.projection.is_empty() {
+            let field_ids = field_ids_by_names(&schema, &self.projection)?;
+            Arc::new(schema.project(&field_ids)?)
+        } else {
+            schema
+        };
+        Ok(schema)
     }
 
     fn children(&self) -> Vec<&PhysicalPlan> {
@@ -230,6 +234,96 @@ impl HashAggregrateExec {
 
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
         Ok(Box::new(std::iter::once(Ok(batch))))
+    }
+}
+
+struct PhysicalPlanDisplay<'a> {
+    indent: usize,
+    plan: &'a PhysicalPlan,
+}
+
+impl<'a> Display for PhysicalPlanDisplay<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let indent = "  ".repeat(self.indent);
+        write!(f, "{}", indent)?;
+        match self.plan {
+            PhysicalPlan::Scan(scan_exec) => writeln!(f, "{}", scan_exec)?,
+            PhysicalPlan::Projection(projection_exec) => writeln!(f, "{}", projection_exec)?,
+            PhysicalPlan::Selection(selection_exec) => writeln!(f, "{}", selection_exec)?,
+            PhysicalPlan::HashAggregate(hash_aggregrate_exec) => {
+                writeln!(f, "{}", hash_aggregrate_exec)?
+            }
+        }
+        for c in self.plan.children() {
+            PhysicalPlanDisplay {
+                indent: self.indent + 1,
+                plan: c,
+            }
+            .fmt(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for PhysicalPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        PhysicalPlanDisplay {
+            indent: 0,
+            plan: self,
+        }
+        .fmt(f)
+    }
+}
+
+impl Display for ScanExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fields = self
+            .schema()
+            .map(|schema| {
+                let fields = schema
+                    .fields()
+                    .iter()
+                    .map(|f| format!("({},{})", f.name(), f.data_type()))
+                    .collect::<Vec<_>>();
+                fields.join(",")
+            })
+            .unwrap_or("Invalid schema".to_string());
+        if self.projection.is_empty() {
+            write!(f, "ScanExec: [{}]; projection=None", fields)
+        } else {
+            write!(
+                f,
+                "ScanExec: [{}]; projection=[{}]",
+                fields,
+                self.projection.join(",")
+            )
+        }
+    }
+}
+
+impl Display for SelectionExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FilterExec: {}", self.expr)
+    }
+}
+
+impl Display for ProjectionExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fields: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+        write!(f, "ProjectionExec: {}", fields.join(", "))
+    }
+}
+
+impl Display for HashAggregrateExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let groups: Vec<String> = self.group_expr.iter().map(|e| e.to_string()).collect();
+        let aggregate: Vec<String> = self.aggregate_expr.iter().map(|e| e.to_string()).collect();
+        write!(
+            f,
+            "HashAggregrateExec: group_expr=[{}], aggregate_expr=[{}]",
+            groups.join(", "),
+            aggregate.join(", ")
+        )
     }
 }
 
@@ -545,7 +639,9 @@ B,three,20
         // column: class
         let group_expr = vec![PhysicalExpr::Column(0)];
         // max(students)
-        let aggregate_expr = vec![PhysicalAggregateExpr::Max(PhysicalExpr::Column(2))];
+        let aggregate_expr = vec![PhysicalAggregateExpr::Max(Box::new(PhysicalExpr::Column(
+            2,
+        )))];
 
         let aggregation = PhysicalPlan::HashAggregate(HashAggregrateExec {
             schema: Arc::new(schema),
@@ -599,8 +695,8 @@ B,two,20,2
         let group_expr = vec![PhysicalExpr::Column(0), PhysicalExpr::Column(1)];
         // max(avg_points), sum(students)
         let aggregate_expr = vec![
-            PhysicalAggregateExpr::Max(PhysicalExpr::Column(3)),
-            PhysicalAggregateExpr::Sum(PhysicalExpr::Column(2)),
+            PhysicalAggregateExpr::Max(Box::new(PhysicalExpr::Column(3))),
+            PhysicalAggregateExpr::Sum(Box::new(PhysicalExpr::Column(2))),
         ];
 
         let aggregation = PhysicalPlan::HashAggregate(HashAggregrateExec {

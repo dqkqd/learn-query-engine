@@ -218,8 +218,8 @@ mod test {
     use anyhow::Result;
     use insta::assert_debug_snapshot;
 
-    use crate::sql::{
-        expr::{SqlExpr, SqlIdentifier},
+    use crate::{
+        sql::expr::{SqlExpr, SqlIdentifier},
         test::parse,
     };
 

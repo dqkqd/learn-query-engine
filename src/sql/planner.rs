@@ -277,7 +277,7 @@ mod test {
     use anyhow::Result;
     use insta::assert_snapshot;
 
-    use crate::sql::test::plan;
+    use crate::test::plan;
 
     #[test]
     fn simple_select() -> Result<()> {

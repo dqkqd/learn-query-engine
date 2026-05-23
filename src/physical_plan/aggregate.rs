@@ -7,8 +7,8 @@ use crate::physical_plan::expr::PhysicalExpr;
 
 #[derive(Debug)]
 pub enum PhysicalAggregateExpr {
-    Max(PhysicalExpr),
-    Sum(PhysicalExpr),
+    Max(Box<PhysicalExpr>),
+    Sum(Box<PhysicalExpr>),
 }
 
 #[derive(Debug)]

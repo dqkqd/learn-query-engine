@@ -4,39 +4,3 @@ pub mod planner;
 pub mod token;
 pub mod token_stream;
 pub mod tokenizer;
-
-#[cfg(test)]
-mod test {
-    use std::{collections::HashMap, sync::Arc};
-
-    use anyhow::Result;
-
-    use crate::{
-        data_source::csv::CsvDataSource,
-        dataframe::DataFrame,
-        logical_plan::{LogicalPlan, Scan},
-        sql::{expr::SqlExpr, parser::Parser, planner::create_dataframe, tokenizer::Tokenizer},
-    };
-
-    pub fn parse(sql: &str) -> Result<SqlExpr> {
-        let tokenizer = Tokenizer::new(sql);
-        let stream = tokenizer.stream()?;
-        let mut parser = Parser::new(stream);
-        let expr = parser.parse()?;
-        Ok(expr)
-    }
-
-    pub fn plan(sql: &str) -> Result<LogicalPlan> {
-        let plan = LogicalPlan::Scan(Scan {
-            path: "employee".to_string(),
-            data_source: Arc::new(CsvDataSource::new("test_data/employee.csv")),
-            projection: vec![],
-        });
-        let sql_expr = parse(sql)?;
-        let tables = DataFrame::new(plan);
-        let tables = HashMap::from([("employee".to_string(), tables)]);
-
-        let df = create_dataframe(sql_expr, tables)?;
-        Ok(df.plan())
-    }
-}
