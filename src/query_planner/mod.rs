@@ -126,7 +126,10 @@ pub fn create_physical_expr(expr: &LogicalExpr, input: &LogicalPlan) -> Result<P
         }
         LogicalExpr::Aggregate { name: _, expr: _ } => todo!(),
         LogicalExpr::Alias { expr, alias: _ } => create_physical_expr(expr, input)?,
-        LogicalExpr::Cast { expr: _, data_type: _ } => todo!(),
+        LogicalExpr::Cast {
+            expr: _,
+            data_type: _,
+        } => todo!(),
     };
     Ok(expr)
 }
