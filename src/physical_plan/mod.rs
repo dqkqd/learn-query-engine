@@ -3,13 +3,14 @@ use std::{collections::BTreeMap, fmt::Display, sync::Arc};
 use anyhow::Result;
 use arrow::{
     array::{ArrayRef, AsArray, RecordBatch, new_null_array},
-    compute::filter_record_batch,
+    compute::{concat_batches, filter_record_batch},
     row::{OwnedRow, RowConverter, SortField},
 };
 use arrow_schema::{ArrowError, Schema};
 
 use crate::{
     data_source::DataSource,
+    logical_plan::JoinType,
     physical_plan::{
         aggregate::{Accumulator, PhysicalAggregateExpr},
         expr::PhysicalExpr,
@@ -25,6 +26,7 @@ pub enum PhysicalPlan {
     Projection(ProjectionExec),
     Selection(SelectionExec),
     HashAggregate(HashAggregrateExec),
+    Join(HashJoinExec),
 }
 
 pub struct ScanExec {
@@ -50,6 +52,16 @@ pub struct HashAggregrateExec {
     pub aggregate_expr: Vec<PhysicalAggregateExpr>,
 }
 
+pub struct HashJoinExec {
+    pub schema: Arc<Schema>,
+    pub lhs: Box<PhysicalPlan>,
+    pub rhs: Box<PhysicalPlan>,
+    pub join_type: JoinType,
+    pub lhs_keys: Vec<usize>,
+    pub rhs_keys: Vec<usize>,
+    pub right_columns_to_include: Vec<usize>,
+}
+
 impl PhysicalPlan {
     pub fn schema(&self) -> Result<Arc<Schema>> {
         match self {
@@ -57,6 +69,7 @@ impl PhysicalPlan {
             PhysicalPlan::Projection(projection_exec) => projection_exec.schema(),
             PhysicalPlan::Selection(selection_exec) => selection_exec.schema(),
             PhysicalPlan::HashAggregate(hash_aggregrate_exec) => hash_aggregrate_exec.schema(),
+            PhysicalPlan::Join(hash_join_exec) => hash_join_exec.schema(),
         }
     }
 
@@ -66,6 +79,7 @@ impl PhysicalPlan {
             PhysicalPlan::Projection(projection_exec) => projection_exec.children(),
             PhysicalPlan::Selection(selection_exec) => selection_exec.children(),
             PhysicalPlan::HashAggregate(hash_aggregrate_exec) => hash_aggregrate_exec.children(),
+            PhysicalPlan::Join(hash_join_exec) => hash_join_exec.children(),
         }
     }
 
@@ -77,6 +91,7 @@ impl PhysicalPlan {
             PhysicalPlan::Projection(projection_exec) => projection_exec.execute(),
             PhysicalPlan::Selection(selection_exec) => selection_exec.execute(),
             PhysicalPlan::HashAggregate(hash_aggregrate_exec) => hash_aggregrate_exec.execute(),
+            PhysicalPlan::Join(hash_join_exec) => hash_join_exec.execute(),
         }
     }
 }
@@ -237,6 +252,115 @@ impl HashAggregrateExec {
     }
 }
 
+impl HashJoinExec {
+    pub fn schema(&self) -> Result<Arc<Schema>> {
+        Ok(Arc::clone(&self.schema))
+    }
+
+    fn children(&self) -> Vec<&PhysicalPlan> {
+        [self.lhs.children(), self.rhs.children()].concat()
+    }
+
+    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+        // build hash table
+        let mut hash_table: BTreeMap<OwnedRow, Vec<RecordBatch>> = BTreeMap::new();
+
+        let lhs_schema = self.lhs.schema()?;
+        let rhs_schema = self.rhs.schema()?;
+
+        let lhs_key_converter = RowConverter::new(
+            self.lhs_keys
+                .iter()
+                .map(|index| SortField::new(lhs_schema.field(*index).data_type().clone()))
+                .collect(),
+        )?;
+        let rhs_key_converter = RowConverter::new(
+            self.rhs_keys
+                .iter()
+                .map(|index| SortField::new(rhs_schema.field(*index).data_type().clone()))
+                .collect(),
+        )?;
+
+        for batch in self.rhs.execute()? {
+            let batch = batch?;
+            let key_rows = rhs_key_converter.convert_columns(
+                &self
+                    .rhs_keys
+                    .iter()
+                    .map(|index| batch.column(*index).clone())
+                    .collect::<Vec<_>>(),
+            )?;
+            for index in 0..key_rows.num_rows() {
+                let key = key_rows.row(index);
+                let slice = batch.slice(index, 1);
+                hash_table.entry(key.owned()).or_insert(vec![]).push(slice);
+            }
+        }
+
+        // probe phase
+        let result = self.lhs.execute()?.map(move |batch| {
+            let batch = batch?;
+            let key_rows = lhs_key_converter.convert_columns(
+                &self
+                    .lhs_keys
+                    .iter()
+                    .map(|index| batch.column(*index).clone())
+                    .collect::<Vec<_>>(),
+            )?;
+
+            let mut batches = vec![];
+
+            for index in 0..key_rows.num_rows() {
+                let key = key_rows.row(index);
+                match hash_table.get(&key.owned()) {
+                    Some(rhs_batches) => {
+                        let rhs_batch = concat_batches(&rhs_schema, rhs_batches)?
+                            .project(&self.right_columns_to_include)?;
+                        let lhs_batch = batch.slice(index, 1);
+                        let lhs_batch = concat_batches(
+                            &lhs_schema,
+                            std::iter::once(&lhs_batch)
+                                .cycle()
+                                .take(rhs_batch.num_rows()),
+                        )?;
+                        let batch = RecordBatch::try_new(
+                            Arc::clone(&self.schema),
+                            [lhs_batch.columns(), rhs_batch.columns()].concat(),
+                        )?;
+                        batches.push(batch)
+                    }
+                    None => match self.join_type {
+                        JoinType::Inner => continue,
+                        JoinType::Left => {
+                            let lhs_batch = batch.slice(index, 1);
+                            let null_columns = self
+                                .right_columns_to_include
+                                .iter()
+                                .map(|index| {
+                                    let field = rhs_schema.field(*index);
+                                    new_null_array(field.data_type(), lhs_batch.num_rows())
+                                })
+                                .collect::<Vec<_>>();
+                            let batch = RecordBatch::try_new(
+                                Arc::clone(&self.schema),
+                                [lhs_batch.columns(), &null_columns].concat(),
+                            )?;
+                            batches.push(batch)
+                        }
+                        JoinType::Right => {
+                            unreachable!("Do not handle right join in physical plan")
+                        }
+                    },
+                };
+            }
+
+            concat_batches(&self.schema, &batches)
+        });
+
+        Ok(Box::new(result))
+    }
+}
+
 struct PhysicalPlanDisplay<'a> {
     indent: usize,
     plan: &'a PhysicalPlan,
@@ -253,6 +377,7 @@ impl<'a> Display for PhysicalPlanDisplay<'a> {
             PhysicalPlan::HashAggregate(hash_aggregrate_exec) => {
                 writeln!(f, "{}", hash_aggregrate_exec)?
             }
+            PhysicalPlan::Join(hash_join_exec) => writeln!(f, "{}", hash_join_exec)?,
         }
         for c in self.plan.children() {
             PhysicalPlanDisplay {
@@ -327,6 +452,28 @@ impl Display for HashAggregrateExec {
     }
 }
 
+impl Display for HashJoinExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let lhs_keys = self
+            .lhs_keys
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let rhs_keys = self
+            .lhs_keys
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        write!(
+            f,
+            "HashJoinExec: lhs={}, rhs={}, type={}, lhs_keys=[{}], rhs_keys=[{}]",
+            self.lhs, self.rhs, self.join_type, lhs_keys, rhs_keys
+        )
+    }
+}
+
 #[cfg(test)]
 mod test {
     use anyhow::Result;
@@ -338,7 +485,11 @@ mod test {
 
     use crate::{
         data_source::{csv::CsvDataSource, memory::MemoryDataSource},
+        dataframe::DataFrame,
+        logical_plan::{LogicalPlan, Scan},
         physical_plan::expr::{PhysicalBinaryExpr, PhysicalLiteralExpr},
+        query_planner::create_physical_plan,
+        test::execute_physical_plan,
     };
 
     use super::*;
@@ -718,6 +869,151 @@ B,two,20,2
         | B     | one   | 3               | 60            |
         | B     | two   | 2               | 20            |
         +-------+-------+-----------------+---------------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn inner_join() -> Result<()> {
+        // SELECT t1.column1, t2.column2 FROM t1 JOIN t2 ON t1.match = t2.match
+        let data_source1 = data_source(
+            r#"
+match,column1
+1,A
+2,B
+3,C
+"#,
+        )?;
+        let data_source2 = data_source(
+            r#"
+match,column2
+1,one1
+1,one2
+3,three
+"#,
+        )?;
+        let lhs = DataFrame::new(LogicalPlan::Scan(Scan {
+            path: "t1".to_string(),
+            data_source: Arc::new(data_source1),
+            projection: vec![],
+        }));
+        let rhs = DataFrame::new(LogicalPlan::Scan(Scan {
+            path: "t2".to_string(),
+            data_source: Arc::new(data_source2),
+            projection: vec![],
+        }));
+        let df = lhs.join(
+            rhs,
+            JoinType::Inner,
+            vec![("match".to_string(), "match".to_string())],
+        );
+        let physical_plan = create_physical_plan(&df.plan())?;
+        let batches = execute_physical_plan(physical_plan)?;
+        assert_snapshot!(pretty_format_batches(&batches)?, @"
+        +-------+---------+---------+
+        | match | column1 | column2 |
+        +-------+---------+---------+
+        | 1     | A       | one1    |
+        | 1     | A       | one2    |
+        | 3     | C       | three   |
+        +-------+---------+---------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn left_join() -> Result<()> {
+        // SELECT t1.column1, t2.column2 FROM t1 LEFT JOIN t2 ON t1.match = t2.match
+        let data_source1 = data_source(
+            r#"
+match,column1
+1,A
+2,B
+3,C
+"#,
+        )?;
+        let data_source2 = data_source(
+            r#"
+match,column2
+1,one1
+1,one2
+3,three
+"#,
+        )?;
+        let lhs = DataFrame::new(LogicalPlan::Scan(Scan {
+            path: "t1".to_string(),
+            data_source: Arc::new(data_source1),
+            projection: vec![],
+        }));
+        let rhs = DataFrame::new(LogicalPlan::Scan(Scan {
+            path: "t2".to_string(),
+            data_source: Arc::new(data_source2),
+            projection: vec![],
+        }));
+        let df = lhs.join(
+            rhs,
+            JoinType::Left,
+            vec![("match".to_string(), "match".to_string())],
+        );
+        let physical_plan = create_physical_plan(&df.plan())?;
+        let batches = execute_physical_plan(physical_plan)?;
+        assert_snapshot!(pretty_format_batches(&batches)?, @"
+        +-------+---------+---------+
+        | match | column1 | column2 |
+        +-------+---------+---------+
+        | 1     | A       | one1    |
+        | 1     | A       | one2    |
+        | 2     | B       |         |
+        | 3     | C       | three   |
+        +-------+---------+---------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn right_join() -> Result<()> {
+        // SELECT t1.column1, t2.column2 FROM t1 RIGHT JOIN t2 ON t1.match = t2.match
+        let data_source1 = data_source(
+            r#"
+match,column1
+1,A
+2,B
+3,C
+"#,
+        )?;
+        let data_source2 = data_source(
+            r#"
+match,column2
+1,one1
+1,one2
+3,three
+"#,
+        )?;
+        let lhs = DataFrame::new(LogicalPlan::Scan(Scan {
+            path: "t1".to_string(),
+            data_source: Arc::new(data_source1),
+            projection: vec![],
+        }));
+        let rhs = DataFrame::new(LogicalPlan::Scan(Scan {
+            path: "t2".to_string(),
+            data_source: Arc::new(data_source2),
+            projection: vec![],
+        }));
+        let df = lhs.join(
+            rhs,
+            JoinType::Right,
+            vec![("match".to_string(), "match".to_string())],
+        );
+        let physical_plan = create_physical_plan(&df.plan())?;
+        let batches = execute_physical_plan(physical_plan)?;
+        assert_snapshot!(pretty_format_batches(&batches)?, @"
+        +-------+---------+---------+
+        | match | column2 | column1 |
+        +-------+---------+---------+
+        | 1     | one1    | A       |
+        | 1     | one2    | A       |
+        | 3     | three   | C       |
+        +-------+---------+---------+
         ");
         Ok(())
     }
