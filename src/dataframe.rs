@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-
 use crate::logical_plan::{
-        Aggregate, Join, JoinType, LogicalPlan, Projection, Selection,
-        expr::{BinaryOp, Literal, LogicalExpr},
-    };
+    Aggregate, Join, JoinType, LogicalPlan, Projection, Selection,
+    expr::{BinaryOp, Literal, LogicalExpr},
+};
 
 #[derive(Debug, Clone)]
 pub struct DataFrame {
