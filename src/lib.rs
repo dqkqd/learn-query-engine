@@ -11,11 +11,13 @@ mod test {
     use std::{collections::HashMap, sync::Arc};
 
     use anyhow::Result;
+    use arrow::array::RecordBatch;
 
     use crate::{
         data_source::csv::CsvDataSource,
         dataframe::DataFrame,
         logical_plan::{LogicalPlan, Scan},
+        physical_plan::PhysicalPlan,
         sql::{expr::SqlExpr, parser::Parser, planner::create_dataframe, tokenizer::Tokenizer},
     };
 
@@ -39,5 +41,9 @@ mod test {
 
         let df = create_dataframe(sql_expr, tables)?;
         Ok(df.plan())
+    }
+
+    pub fn execute_physical_plan(plan: PhysicalPlan) -> Result<Vec<RecordBatch>> {
+        plan.execute()?.map(|b| b.map_err(Into::into)).collect()
     }
 }

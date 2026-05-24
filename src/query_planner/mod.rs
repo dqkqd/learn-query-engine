@@ -137,9 +137,13 @@ pub fn create_physical_expr(expr: &LogicalExpr, input: &LogicalPlan) -> Result<P
 #[cfg(test)]
 mod test {
     use anyhow::Result;
+    use arrow::util::pretty::pretty_format_batches;
     use insta::assert_snapshot;
 
-    use crate::{query_planner::create_physical_plan, test::plan};
+    use crate::{
+        query_planner::create_physical_plan,
+        test::{execute_physical_plan, plan},
+    };
 
     #[test]
     fn plan_aggregate_query() -> Result<()> {
@@ -149,6 +153,16 @@ mod test {
         ProjectionExec: #0, #1
           HashAggregrateExec: group_expr=[#3], aggregate_expr=[SUM(#5)]
             ScanExec: [(id,Int64),(first_name,Utf8),(last_name,Utf8),(state,Utf8),(job_title,Utf8),(salary,Int64)]; projection=None
+        ");
+        let batches = execute_physical_plan(physical_plan)?;
+        assert_snapshot!(pretty_format_batches(&batches)?, @"
+        +-------+-------+
+        | state | SUM   |
+        +-------+-------+
+        |       | 11500 |
+        | CA    | 12000 |
+        | CO    | 21500 |
+        +-------+-------+
         ");
         Ok(())
     }
