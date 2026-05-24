@@ -8,7 +8,7 @@ use arrow::{
     error::ArrowError,
 };
 
-use crate::{data_source::DataSource, utils::field_ids_by_names};
+use crate::utils::field_ids_by_names;
 
 #[derive(Debug, Clone)]
 pub struct CsvDataSource {
@@ -20,10 +20,8 @@ impl CsvDataSource {
         let filepath = PathBuf::from(file.as_ref());
         CsvDataSource { filepath }
     }
-}
 
-impl DataSource for CsvDataSource {
-    fn schema(&self) -> Result<Arc<Schema>> {
+    pub fn schema(&self) -> Result<Arc<Schema>> {
         // TODO: this is a costly operation, consider caching it
         if !self.filepath.exists() {
             bail!("file doesn't exist: {:?}", self.filepath);
@@ -36,8 +34,8 @@ impl DataSource for CsvDataSource {
         Ok(Arc::new(schema))
     }
 
-    fn scan(
-        &self,
+    pub fn scan(
+        self,
         projection: Vec<String>,
     ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let schema = self.schema()?;
@@ -60,7 +58,7 @@ mod test {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    use crate::data_source::{DataSource, csv::CsvDataSource};
+    use crate::data_source::csv::CsvDataSource;
 
     #[test]
     fn scan_all_columns() -> Result<()> {

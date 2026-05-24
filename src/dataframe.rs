@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::{
-    data_source::{csv::CsvDataSource, parquet::ParquetDataSource},
+    data_source::{DataSource, csv::CsvDataSource, parquet::ParquetDataSource},
     logical_plan::{
         Aggregate, Join, JoinType, LogicalPlan, Projection, Scan, Selection,
         expr::{BinaryOp, Literal, LogicalExpr},
@@ -19,20 +19,20 @@ pub struct ExecutionContext {}
 
 impl ExecutionContext {
     pub fn csv(filename: impl AsRef<str>) -> Result<DataFrame> {
-        let data_source = CsvDataSource::new(&filename);
+        let data_source = DataSource::Csv(CsvDataSource::new(&filename));
         let plan = LogicalPlan::Scan(Scan {
             path: filename.as_ref().to_string(),
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
         Ok(DataFrame::new(plan))
     }
 
     pub fn parquet(filename: impl AsRef<str>) -> Result<DataFrame> {
-        let data_source = ParquetDataSource::new(&filename);
+        let data_source = DataSource::Parquet(ParquetDataSource::new(&filename));
         let plan = LogicalPlan::Scan(Scan {
             path: filename.as_ref().to_string(),
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
         Ok(DataFrame::new(plan))

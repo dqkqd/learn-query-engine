@@ -19,7 +19,7 @@ pub enum LogicalPlan {
 #[derive(Debug, Clone)]
 pub struct Scan {
     pub path: String,
-    pub data_source: Arc<dyn DataSource>,
+    pub data_source: DataSource,
     pub projection: Vec<String>,
 }
 
@@ -281,7 +281,7 @@ mod test {
         },
     };
 
-    fn data_source() -> Result<impl DataSource> {
+    fn data_source() -> Result<DataSource> {
         let batch = record_batch!(
             ("a", Int32, [1, 2, 3, 4, 5, 6, 7, 8]),
             (
@@ -293,14 +293,17 @@ mod test {
             )
         )?;
         let schema = batch.schema();
-        Ok(MemoryDataSource::new(schema, vec![batch]))
+        Ok(DataSource::Memory(MemoryDataSource::new(
+            schema,
+            vec![batch],
+        )))
     }
 
     #[test]
     fn test_scan() -> Result<()> {
         let plan = LogicalPlan::Scan(Scan {
             path: "users".to_string(),
-            data_source: Arc::new(data_source()?),
+            data_source: data_source()?,
             projection: vec!["name".to_string()],
         });
         assert_snapshot!(plan.to_string(), @"Scan: users; projection=[name]");
@@ -311,7 +314,7 @@ mod test {
     fn test_selection() -> Result<()> {
         let scan = LogicalPlan::Scan(Scan {
             path: "users".to_string(),
-            data_source: Arc::new(data_source()?),
+            data_source: data_source()?,
             projection: vec!["name".to_string()],
         });
         let plan = LogicalPlan::Selection(Selection {
@@ -333,7 +336,7 @@ mod test {
     fn test_compose() -> Result<()> {
         let scan = LogicalPlan::Scan(Scan {
             path: "employees".to_string(),
-            data_source: Arc::new(data_source()?),
+            data_source: data_source()?,
             projection: vec![],
         });
 

@@ -1,8 +1,10 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 
 use anyhow::Result;
 
-use crate::logical_plan::{Aggregate, Join, LogicalPlan, Projection, Scan, Selection, expr::LogicalExpr};
+use crate::logical_plan::{
+    Aggregate, Join, LogicalPlan, Projection, Scan, Selection, expr::LogicalExpr,
+};
 
 pub enum OptimizerRule {
     ProjectionPushDown,
@@ -34,7 +36,7 @@ fn push_down(plan: &LogicalPlan, column_names: &mut BTreeSet<String>) -> Result<
                 .collect::<Vec<_>>();
             LogicalPlan::Scan(Scan {
                 path: scan.path.clone(),
-                data_source: Arc::clone(&scan.data_source),
+                data_source: scan.data_source.clone(),
                 projection,
             })
         }

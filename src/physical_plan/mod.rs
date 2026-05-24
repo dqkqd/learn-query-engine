@@ -30,7 +30,7 @@ pub enum PhysicalPlan {
 }
 
 pub struct ScanExec {
-    pub data_source: Arc<dyn DataSource>,
+    pub data_source: DataSource,
     pub projection: Vec<String>,
 }
 
@@ -83,9 +83,7 @@ impl PhysicalPlan {
         }
     }
 
-    pub fn execute(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+    pub fn execute(self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         match self {
             PhysicalPlan::Scan(scan_exec) => scan_exec.execute(),
             PhysicalPlan::Projection(projection_exec) => projection_exec.execute(),
@@ -112,7 +110,7 @@ impl ScanExec {
         vec![]
     }
 
-    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+    fn execute(self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         // TODO: clone?
         self.data_source.scan(self.projection.clone())
     }
@@ -127,9 +125,9 @@ impl ProjectionExec {
         vec![&self.input]
     }
 
-    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+    fn execute(self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let result = self.input.execute()?;
-        let result = result.map(|batch| {
+        let result = result.map(move |batch| {
             let batch = batch?;
             let columns: Result<Vec<ArrayRef>, ArrowError> =
                 self.expr.iter().map(|e| e.evaluate(&batch)).collect();
@@ -149,9 +147,9 @@ impl SelectionExec {
         vec![&self.input]
     }
 
-    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+    fn execute(self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let result = self.input.execute()?;
-        let result = result.map(|batch| {
+        let result = result.map(move |batch| {
             let batch = batch?;
             let predicate = self.expr.evaluate(&batch)?;
             let predicate = predicate.as_boolean();
@@ -170,7 +168,7 @@ impl HashAggregrateExec {
         vec![&self.input]
     }
 
-    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+    fn execute(self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         let mut map: BTreeMap<OwnedRow, Vec<Accumulator>> = BTreeMap::new();
         let data_types = self
             .schema
@@ -261,7 +259,7 @@ impl HashJoinExec {
         [self.lhs.children(), self.rhs.children()].concat()
     }
 
-    fn execute(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
+    fn execute(self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
         // build hash table
         let mut hash_table: BTreeMap<OwnedRow, Vec<RecordBatch>> = BTreeMap::new();
 
@@ -494,7 +492,7 @@ mod test {
 
     use super::*;
 
-    fn data_source(data: &str) -> Result<MemoryDataSource> {
+    fn data_source(data: &str) -> Result<DataSource> {
         let mut file = NamedTempFile::new()?;
         file.write_all(data.trim().as_bytes())?;
         let path = file.path();
@@ -506,8 +504,7 @@ mod test {
             records.push(r);
         }
         let schema = records[0].schema();
-        let memory = MemoryDataSource::new(schema, records);
-        Ok(memory)
+        Ok(DataSource::Memory(MemoryDataSource::new(schema, records)))
     }
 
     #[test]
@@ -524,7 +521,7 @@ column1,column2
 "#,
         )?;
         let plan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
         let batch = plan.execute()?.map(|v| v.unwrap()).collect::<Vec<_>>();
@@ -557,7 +554,7 @@ column1,column2
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec!["column1".to_string()],
         });
         let batch = scan.execute()?.map(|v| v.unwrap()).collect::<Vec<_>>();
@@ -590,7 +587,7 @@ column1,column2
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
         let schema = Schema::new(vec![Field::new("from_column_2", DataType::Utf8, false)]);
@@ -633,7 +630,7 @@ column1,column2
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
         let schema = Schema::new(vec![
@@ -684,7 +681,7 @@ column1,column2
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
 
@@ -734,7 +731,7 @@ f,three
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
 
@@ -777,7 +774,7 @@ B,three,20
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
 
@@ -830,7 +827,7 @@ B,two,20,2
 "#,
         )?;
         let scan = PhysicalPlan::Scan(ScanExec {
-            data_source: Arc::new(data_source),
+            data_source,
             projection: vec![],
         });
 
@@ -894,12 +891,12 @@ match,column2
         )?;
         let lhs = DataFrame::new(LogicalPlan::Scan(Scan {
             path: "t1".to_string(),
-            data_source: Arc::new(data_source1),
+            data_source: data_source1,
             projection: vec![],
         }));
         let rhs = DataFrame::new(LogicalPlan::Scan(Scan {
             path: "t2".to_string(),
-            data_source: Arc::new(data_source2),
+            data_source: data_source2,
             projection: vec![],
         }));
         let df = lhs.join(
@@ -942,12 +939,12 @@ match,column2
         )?;
         let lhs = DataFrame::new(LogicalPlan::Scan(Scan {
             path: "t1".to_string(),
-            data_source: Arc::new(data_source1),
+            data_source: data_source1,
             projection: vec![],
         }));
         let rhs = DataFrame::new(LogicalPlan::Scan(Scan {
             path: "t2".to_string(),
-            data_source: Arc::new(data_source2),
+            data_source: data_source2,
             projection: vec![],
         }));
         let df = lhs.join(
@@ -991,12 +988,12 @@ match,column2
         )?;
         let lhs = DataFrame::new(LogicalPlan::Scan(Scan {
             path: "t1".to_string(),
-            data_source: Arc::new(data_source1),
+            data_source: data_source1,
             projection: vec![],
         }));
         let rhs = DataFrame::new(LogicalPlan::Scan(Scan {
             path: "t2".to_string(),
-            data_source: Arc::new(data_source2),
+            data_source: data_source2,
             projection: vec![],
         }));
         let df = lhs.join(

@@ -3,8 +3,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use arrow::{array::RecordBatch, datatypes::Schema, error::ArrowError};
 
-use crate::data_source::DataSource;
-
 #[derive(Debug, Clone)]
 pub struct MemoryDataSource {
     schema: Arc<Schema>,
@@ -17,16 +15,16 @@ impl MemoryDataSource {
     }
 }
 
-impl DataSource for MemoryDataSource {
-    fn schema(&self) -> Result<Arc<Schema>> {
+impl MemoryDataSource {
+    pub fn schema(&self) -> Result<Arc<Schema>> {
         Ok(Arc::clone(&self.schema))
     }
 
-    fn scan(
-        &self,
+    pub fn scan(
+        self,
         projection: Vec<String>,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + '_>> {
-        let records = self.records.iter().map(move |batch| {
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>>> {
+        let records = self.records.into_iter().map(move |batch| {
             let batch = batch.clone();
             let schema = batch.schema();
             let mut field_ids = Vec::with_capacity(projection.len());
@@ -51,7 +49,7 @@ mod test {
     use arrow_schema;
     use insta::assert_snapshot;
 
-    use crate::data_source::{DataSource, memory::MemoryDataSource};
+    use crate::data_source::memory::MemoryDataSource;
 
     #[test]
     fn scan_all_columns() -> Result<()> {

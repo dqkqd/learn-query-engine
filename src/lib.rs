@@ -9,13 +9,13 @@ pub mod utils;
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
 
     use anyhow::Result;
     use arrow::array::RecordBatch;
 
     use crate::{
-        data_source::csv::CsvDataSource,
+        data_source::{DataSource, csv::CsvDataSource},
         dataframe::DataFrame,
         logical_plan::{LogicalPlan, Scan},
         physical_plan::PhysicalPlan,
@@ -33,7 +33,7 @@ mod test {
     pub fn plan(sql: &str) -> Result<LogicalPlan> {
         let plan = LogicalPlan::Scan(Scan {
             path: "employee".to_string(),
-            data_source: Arc::new(CsvDataSource::new("test_data/employee.csv")),
+            data_source: DataSource::Csv(CsvDataSource::new("test_data/employee.csv")),
             projection: vec![],
         });
         let sql_expr = parse(sql)?;
