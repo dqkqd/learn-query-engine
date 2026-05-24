@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use arrow_schema::{Field, Schema};
+use arrow_schema::{ArrowError, Field, Schema};
 
 use crate::{
     logical_plan::{
@@ -9,7 +9,7 @@ use crate::{
         expr::{BinaryOp, Literal, LogicalExpr},
     },
     physical_plan::{
-        HashAggregrateExec, PhysicalPlan, ProjectionExec, ScanExec, SelectionExec,
+        HashAggregrateExec, HashJoinExec, PhysicalPlan, ProjectionExec, ScanExec, SelectionExec,
         aggregate::PhysicalAggregateExpr,
         expr::{PhysicalBinaryExpr, PhysicalBinaryOp, PhysicalExpr, PhysicalLiteralExpr},
     },
@@ -84,7 +84,43 @@ pub fn create_physical_plan(plan: &LogicalPlan) -> Result<PhysicalPlan> {
                 aggregate_expr,
             })
         }
-        LogicalPlan::Join(_join) => todo!(),
+        LogicalPlan::Join(join) => {
+            let lhs = create_physical_plan(&join.left)?;
+            let rhs = create_physical_plan(&join.right)?;
+
+            let left_schema = join.left.schema()?;
+            let lhs_keys = join
+                .on
+                .iter()
+                .map(|(lhs_key, _)| left_schema.index_of(lhs_key))
+                .collect::<Result<Vec<_>, ArrowError>>();
+            let lhs_keys = lhs_keys?;
+
+            let right_schema = join.right.schema()?;
+            let rhs_key = join
+                .on
+                .iter()
+                .map(|(_, rhs_key)| right_schema.index_of(rhs_key))
+                .collect::<Result<Vec<_>, ArrowError>>();
+            let rhs_keys = rhs_key?;
+
+            let right_columns_to_include = (0..right_schema.fields().len())
+                .filter(|index| {
+                    let field = right_schema.field(*index);
+                    left_schema.field_with_name(field.name()).is_err()
+                })
+                .collect::<Vec<_>>();
+
+            PhysicalPlan::Join(HashJoinExec {
+                schema,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                join_type: join.join_type.clone(),
+                lhs_keys,
+                rhs_keys,
+                right_columns_to_include,
+            })
+        }
     };
     Ok(plan)
 }
