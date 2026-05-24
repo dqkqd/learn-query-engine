@@ -3,7 +3,7 @@ pub mod expr;
 use anyhow::Result;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
-use std::{fmt::Display, sync::Arc};
+use std::{collections::BTreeSet, fmt::Display, sync::Arc};
 
 use crate::{data_source::DataSource, logical_plan::expr::LogicalExpr, utils::field_ids_by_names};
 
@@ -144,7 +144,21 @@ impl Aggregate {
 
 impl Join {
     fn schema(&self) -> Result<Arc<Schema>> {
-        todo!()
+        let lhs = self.left.schema()?;
+        let lhs = lhs.fields();
+        let rhs = self.right.schema()?;
+        let rhs = rhs.fields();
+
+        let (lhs, rhs) = match self.join_type {
+            JoinType::Inner | JoinType::Left => (lhs, rhs),
+            JoinType::Right => (rhs, lhs),
+        };
+
+        let lhs_names = lhs.iter().map(|f| f.name()).collect::<BTreeSet<_>>();
+        let rhs = rhs.iter().filter(|f| !lhs_names.contains(f.name()));
+        let fields = lhs.iter().cloned().chain(rhs.cloned()).collect::<Vec<_>>();
+        let schema = Schema::new(fields);
+        Ok(Arc::new(schema))
     }
 
     fn children(&self) -> Vec<&LogicalPlan> {
@@ -166,7 +180,7 @@ impl<'a> Display for LogicalPlanDisplay<'a> {
             LogicalPlan::Selection(selection) => writeln!(f, "{}", selection)?,
             LogicalPlan::Projection(projection) => writeln!(f, "{}", projection)?,
             LogicalPlan::Aggregate(aggregate) => writeln!(f, "{}", aggregate)?,
-            LogicalPlan::Join(_join) => todo!(),
+            LogicalPlan::Join(join) => write!(f, "{}", join)?,
         }
         for c in self.plan.children() {
             LogicalPlanDisplay {
