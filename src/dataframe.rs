@@ -83,12 +83,24 @@ impl DataFrame {
         join_type: JoinType,
         on: Vec<(String, String)>,
     ) -> DataFrame {
-        let plan = LogicalPlan::Join(Join {
-            left: Box::new(self.plan),
-            right: Box::new(right.plan),
-            join_type,
-            on,
-        });
+        let plan = match join_type {
+            JoinType::Inner | JoinType::Left => LogicalPlan::Join(Join {
+                left: Box::new(self.plan),
+                right: Box::new(right.plan),
+                join_type,
+                on,
+            }),
+            JoinType::Right => {
+                let on = on.into_iter().map(|(l, r)| (r, l)).collect();
+                LogicalPlan::Join(Join {
+                    left: Box::new(right.plan),
+                    right: Box::new(self.plan),
+                    join_type: JoinType::Left,
+                    on,
+                })
+            }
+        };
+
         DataFrame { plan }
     }
 }
