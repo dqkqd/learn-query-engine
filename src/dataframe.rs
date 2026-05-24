@@ -1,42 +1,14 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 
-use crate::{
-    data_source::{DataSource, csv::CsvDataSource, parquet::ParquetDataSource},
-    logical_plan::{
-        Aggregate, Join, JoinType, LogicalPlan, Projection, Scan, Selection,
+use crate::logical_plan::{
+        Aggregate, Join, JoinType, LogicalPlan, Projection, Selection,
         expr::{BinaryOp, Literal, LogicalExpr},
-    },
-};
+    };
 
 #[derive(Debug, Clone)]
 pub struct DataFrame {
     plan: LogicalPlan,
-}
-
-pub struct ExecutionContext {}
-
-impl ExecutionContext {
-    pub fn csv(filename: impl AsRef<str>) -> Result<DataFrame> {
-        let data_source = DataSource::Csv(CsvDataSource::new(&filename));
-        let plan = LogicalPlan::Scan(Scan {
-            path: filename.as_ref().to_string(),
-            data_source,
-            projection: vec![],
-        });
-        Ok(DataFrame::new(plan))
-    }
-
-    pub fn parquet(filename: impl AsRef<str>) -> Result<DataFrame> {
-        let data_source = DataSource::Parquet(ParquetDataSource::new(&filename));
-        let plan = LogicalPlan::Scan(Scan {
-            path: filename.as_ref().to_string(),
-            data_source,
-            projection: vec![],
-        });
-        Ok(DataFrame::new(plan))
-    }
 }
 
 impl DataFrame {
@@ -211,7 +183,10 @@ mod test {
     use anyhow::Result;
     use insta::assert_snapshot;
 
-    use crate::dataframe::{ExecutionContext, col, lit};
+    use crate::{
+        dataframe::{col, lit},
+        execution::ExecutionContext,
+    };
 
     #[test]
     fn test_dataframe() -> Result<()> {

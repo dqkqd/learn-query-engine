@@ -14,7 +14,7 @@ use crate::{
 
 pub fn create_dataframe(
     sql_expr: SqlExpr,
-    tables: HashMap<String, DataFrame>,
+    tables: &HashMap<String, DataFrame>,
 ) -> Result<DataFrame> {
     let SqlExpr::Select(select) = sql_expr else {
         bail!("Not a select statement: {:?}", sql_expr)

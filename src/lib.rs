@@ -1,5 +1,6 @@
 pub mod data_source;
 pub mod dataframe;
+pub mod execution;
 pub mod logical_plan;
 pub mod optimizer;
 pub mod physical_plan;
@@ -40,7 +41,7 @@ mod test {
         let tables = DataFrame::new(plan);
         let tables = HashMap::from([("employee".to_string(), tables)]);
 
-        let df = create_dataframe(sql_expr, tables)?;
+        let df = create_dataframe(sql_expr, &tables)?;
         Ok(df.plan())
     }
 

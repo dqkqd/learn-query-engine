@@ -6,6 +6,15 @@ use crate::logical_plan::{
     Aggregate, Join, LogicalPlan, Projection, Scan, Selection, expr::LogicalExpr,
 };
 
+pub fn optimize(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let rules = vec![OptimizerRule::ProjectionPushDown];
+    let mut plan = plan;
+    for rule in rules {
+        plan = rule.optimize(&plan)?;
+    }
+    Ok(plan)
+}
+
 pub enum OptimizerRule {
     ProjectionPushDown,
 }
@@ -115,7 +124,7 @@ fn extract_columns(
             extract_columns(rhs, input, accum)?;
         }
         LogicalExpr::Alias { expr, alias: _ } => extract_columns(expr, input, accum)?,
-        LogicalExpr::Aggregate { name: _, expr: _ } => {}
+        LogicalExpr::Aggregate { name: _, expr } => extract_columns(expr, input, accum)?,
         LogicalExpr::Cast {
             expr: _,
             data_type: _,
@@ -135,7 +144,6 @@ mod test {
     #[test]
     fn test_projection_push_down() -> Result<()> {
         let plan = plan("SELECT id, first_name, last_name FROM employee WHERE state = 'CO'")?;
-        dbg!(plan.to_string());
         let plan = OptimizerRule::ProjectionPushDown.optimize(&plan)?;
         assert_snapshot!(plan.to_string(), @"
         Projection: #id, #first_name, #last_name
